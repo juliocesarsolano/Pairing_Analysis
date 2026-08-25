@@ -133,6 +133,9 @@ def cached_multiplot(
     scatter_limits: tuple[float, float] | None,
     qq_limits: tuple[float, float] | None,
     display_quantile: float | None,
+    figure_title: str,
+    figure_subtitle: str,
+    filter_note: str,
 ):
     """Cache KDE and Plotly figure construction."""
     metrics = compute_pair_metrics(ref_values, cmp_values)
@@ -146,6 +149,9 @@ def cached_multiplot(
         scatter_limits=scatter_limits,
         qq_limits=qq_limits,
         display_quantile=display_quantile,
+        title=figure_title,
+        subtitle=figure_subtitle,
+        footer_note=filter_note,
     )
     return build_multiplot(ref_values, cmp_values, metrics, stats_frame, options)
 
@@ -298,29 +304,61 @@ def render_app() -> None:
                 return
             trim_bounds = (float(lower), float(upper))
 
-        use_domain = st.checkbox("Apply domain / lithology filter", value=False)
-        domain_cfg: dict[str, Any] | None = None
-        if use_domain:
-            domain_a = st.selectbox(
-                "Dataset A domain column", list(table_a.frame.columns), key="domain_a"
-            )
-            domain_b = st.selectbox(
-                "Dataset B domain column", list(table_b.frame.columns), key="domain_b"
-            )
-            values_a = _domain_values(table_a.frame[domain_a])
-            values_b = _domain_values(table_b.frame[domain_b])
-            keep_a = st.multiselect(
-                "Dataset A values", values_a, default=values_a, key="domain_values_a"
-            )
-            keep_b = st.multiselect(
-                "Dataset B values", values_b, default=values_b, key="domain_values_b"
-            )
-            domain_cfg = {
-                "a_col": domain_a,
-                "b_col": domain_b,
-                "a_values": keep_a,
-                "b_values": keep_b,
-            }
+        use_category_filter = st.checkbox(
+            "Categorical Variable Filter",
+            value=False,
+            help=(
+                "Optionally restrict the analysis to selected categories such as lithology, "
+                "estimation domain, alteration, weathering, sample type, phase, or year. "
+                "Choose the corresponding field independently in each dataset."
+            ),
+        )
+        categorical_cfg: dict[str, Any] | None = None
+        if use_category_filter:
+            excluded_a = {variable_a, *(value for value in map_a.values() if value is not None)}
+            excluded_b = {variable_b, *(value for value in map_b.values() if value is not None)}
+            categorical_a = _categorical_candidates(table_a.frame, excluded_a)
+            categorical_b = _categorical_candidates(table_b.frame, excluded_b)
+            if not categorical_a or not categorical_b:
+                st.warning(
+                    "No suitable categorical fields were detected in one or both datasets. "
+                    "Categorical fields may be text/category columns or low-cardinality coded fields."
+                )
+            else:
+                category_a = st.selectbox(
+                    "Dataset A categorical field",
+                    categorical_a,
+                    key="categorical_a",
+                    help="Select the categorical field used to restrict Dataset A.",
+                )
+                matched_b = _matching_column(category_a, categorical_b)
+                category_b = st.selectbox(
+                    "Dataset B categorical field",
+                    categorical_b,
+                    index=categorical_b.index(matched_b) if matched_b in categorical_b else 0,
+                    key="categorical_b",
+                    help="Select the equivalent categorical field in Dataset B.",
+                )
+                values_a = _domain_values(table_a.frame[category_a])
+                values_b = _domain_values(table_b.frame[category_b])
+                keep_a = st.multiselect(
+                    "Dataset A categories",
+                    values_a,
+                    default=values_a,
+                    key="categorical_values_a",
+                )
+                keep_b = st.multiselect(
+                    "Dataset B categories",
+                    values_b,
+                    default=values_b,
+                    key="categorical_values_b",
+                )
+                categorical_cfg = {
+                    "a_col": category_a,
+                    "b_col": category_b,
+                    "a_values": keep_a,
+                    "b_values": keep_b,
+                }
 
         sidebar_banner("Labels", "Series names")
         series_name_help = (
@@ -381,20 +419,29 @@ def render_app() -> None:
         ref_var, cmp_var = variable_b, variable_a
         ref_upload_name, cmp_upload_name = upload_b.name, upload_a.name
 
+    # Series-name inputs intentionally start blank. If the user leaves them blank,
+    # fall back to the uploaded file stems so figures and exports remain self-describing.
+    reference_label = reference_label.strip() or Path(ref_upload_name).stem
+    comparison_label = comparison_label.strip() or Path(cmp_upload_name).stem
+
     try:
         filtered_a = _apply_eligibility_filters(
             table_a.frame,
             variable_a,
             valid_assays_only,
             trim_bounds,
-            None if domain_cfg is None else (domain_cfg["a_col"], domain_cfg["a_values"]),
+            None
+            if categorical_cfg is None
+            else (categorical_cfg["a_col"], categorical_cfg["a_values"]),
         )
         filtered_b = _apply_eligibility_filters(
             table_b.frame,
             variable_b,
             valid_assays_only,
             trim_bounds,
-            None if domain_cfg is None else (domain_cfg["b_col"], domain_cfg["b_values"]),
+            None
+            if categorical_cfg is None
+            else (categorical_cfg["b_col"], categorical_cfg["b_values"]),
         )
         if reference_choice == "Dataset A":
             reference, comparison = filtered_a, filtered_b
@@ -455,6 +502,22 @@ def render_app() -> None:
         preset="study",
         near_zero_fraction=float(near_zero_fraction),
     )
+
+    figure_title = f"Paired-Sample Comparison — {variable_label}"
+    search_axes_label = "XY" if ignore_z else "XYZ"
+    figure_subtitle = (
+        f"{comparison_label} vs {reference_label} · n = {ref_values.size:,} · "
+        f"{search_axes_label} distance < {float(dismax):.2f} m · {mode}"
+    )
+    filter_note = _analysis_filter_note(
+        valid_assays_only=valid_assays_only,
+        trim_bounds=trim_bounds,
+        categorical_cfg=categorical_cfg,
+        search_axes_label=search_axes_label,
+        dismax=float(dismax),
+        pairing_mode=mode,
+    )
+
     fig = cached_multiplot(
         ref_values,
         cmp_values,
@@ -468,6 +531,9 @@ def render_app() -> None:
         scatter_limits,
         qq_limits,
         display_quantile,
+        figure_title,
+        figure_subtitle,
+        filter_note,
     )
 
     tabs = st.tabs(["Analysis", "Pairing Report", "Exports"])
@@ -537,10 +603,6 @@ def render_app() -> None:
             )
 
         st.markdown("### Paired-Sample Comparison")
-        st.caption(
-            f"Reference: **{reference_label}** · Comparison: **{comparison_label}** · "
-            f"Variable: **{variable_label}** · Search distance: **{float(dismax):.2f} m**"
-        )
         st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
         with st.expander("Statistics table — full-precision calculations", expanded=False):
             st.dataframe(stats_frame, use_container_width=True, hide_index=True)
@@ -779,6 +841,86 @@ def _domain_values(series: pd.Series) -> list[Any]:
         return values
 
 
+def _categorical_candidates(
+    frame: pd.DataFrame,
+    excluded: set[str],
+    max_unique: int = 60,
+) -> list[str]:
+    """Return text/category and low-cardinality coded fields suitable for filtering."""
+    candidates: list[str] = []
+    n_rows = max(len(frame), 1)
+    for column in frame.columns:
+        name = str(column)
+        if name in excluded:
+            continue
+        series = frame[column]
+        unique_count = int(series.nunique(dropna=True))
+        if unique_count == 0 or unique_count > max_unique:
+            continue
+        is_text_like = (
+            isinstance(series.dtype, pd.CategoricalDtype)
+            or pd.api.types.is_object_dtype(series)
+            or pd.api.types.is_string_dtype(series)
+            or pd.api.types.is_bool_dtype(series)
+        )
+        is_low_cardinality_code = (
+            pd.api.types.is_numeric_dtype(series)
+            and unique_count <= max(12, int(n_rows * 0.10))
+        )
+        if is_text_like or is_low_cardinality_code:
+            candidates.append(name)
+    return candidates
+
+
+def _matching_column(source_column: str, candidates: list[str]) -> str | None:
+    """Find the most direct normalized-name match in a second dataset."""
+    source = _normalize(source_column)
+    for candidate in candidates:
+        if _normalize(candidate) == source:
+            return candidate
+    return None
+
+
+def _format_filter_values(values: list[Any], max_items: int = 5) -> str:
+    """Return a compact, report-friendly categorical selection label."""
+    if not values:
+        return "none"
+    text = [str(value) for value in values]
+    if len(text) <= max_items:
+        return ", ".join(text)
+    return ", ".join(text[:max_items]) + f", +{len(text) - max_items} more"
+
+
+def _analysis_filter_note(
+    *,
+    valid_assays_only: bool,
+    trim_bounds: tuple[float, float] | None,
+    categorical_cfg: dict[str, Any] | None,
+    search_axes_label: str,
+    dismax: float,
+    pairing_mode: str,
+) -> str:
+    """Build the concise filter footnote printed inside the comparison figure."""
+    parts = [
+        f"Search: {search_axes_label} distance < {dismax:.2f} m",
+        f"Pairing: {pairing_mode}",
+        "Valid assays only" if valid_assays_only else "Invalid assays not pre-filtered",
+    ]
+    if trim_bounds is not None:
+        parts.append(f"Grade range: {trim_bounds[0]:.4g} to {trim_bounds[1]:.4g}")
+    else:
+        parts.append("Grade range: not applied")
+    if categorical_cfg is not None:
+        parts.append(
+            "Categorical: "
+            f"A[{categorical_cfg['a_col']}] = {_format_filter_values(categorical_cfg['a_values'])}; "
+            f"B[{categorical_cfg['b_col']}] = {_format_filter_values(categorical_cfg['b_values'])}"
+        )
+    else:
+        parts.append("Categorical filter: not applied")
+    return "Filters — " + " · ".join(parts)
+
+
 def _paired_display_coordinates(
     frame: pd.DataFrame,
     mapping: dict[str, str | None],
@@ -837,7 +979,7 @@ def _apply_eligibility_filters(
     variable: str,
     valid_only: bool,
     trim_bounds: tuple[float, float] | None,
-    domain_filter: tuple[str, list[Any]] | None,
+    categorical_filter: tuple[str, list[Any]] | None,
 ) -> pd.DataFrame:
     mask = pd.Series(True, index=frame.index)
     numeric_variable = pd.to_numeric(frame[variable], errors="coerce")
@@ -848,8 +990,8 @@ def _apply_eligibility_filters(
         mask &= np.isfinite(numeric_variable) & numeric_variable.between(
             lower, upper, inclusive="both"
         )
-    if domain_filter is not None:
-        column, allowed = domain_filter
+    if categorical_filter is not None:
+        column, allowed = categorical_filter
         mask &= frame[column].isin(allowed)
     return frame.loc[mask].copy().reset_index(drop=True)
 

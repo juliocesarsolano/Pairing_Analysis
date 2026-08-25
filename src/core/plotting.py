@@ -24,6 +24,9 @@ SOURCE_PALETTE = ("#1F77B4", "#FF7F0E")
 CORPORATE_PALETTE = (CORPORATE_BLUE, CORPORATE_GOLD)
 CORPORATE_GRID = "rgba(199,200,202,0.45)"
 CORPORATE_NEUTRAL = "#F3F4F5"
+MAP_BACKGROUND = "#F7F9FA"
+MAP_GRID = "rgba(93,115,128,0.20)"
+MAP_FRAME = "#526773"
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,9 @@ class PlotOptions:
     scatter_limits: tuple[float, float] | None = None
     qq_limits: tuple[float, float] | None = None
     display_quantile: float | None = None
+    title: str | None = None
+    subtitle: str | None = None
+    footer_note: str | None = None
     width: int = 1000
     height: int = 1000
 
@@ -67,7 +73,9 @@ def build_multiplot(
     )
 
     ref_color, cmp_color = options.colors
-    scatter_range = options.scatter_limits or _joint_axis_range(x, y, options.display_quantile)
+    scatter_range = options.scatter_limits or _joint_axis_range(
+        x, y, options.display_quantile
+    )
     density = _kde_density(x, y)
 
     # [1] Top-left: density scatterplot.
@@ -178,18 +186,24 @@ def build_multiplot(
         col=2,
     )
 
-    cdf_range = _joint_axis_range(x, y, options.display_quantile, include_zero=False)
+    cdf_range = _joint_axis_range(
+        x, y, options.display_quantile, include_zero=False
+    )
 
     # [3] Bottom-left: Q-Q plot.
     qq_x, qq_y = qq_values(y, x)
-    qq_range = options.qq_limits or _joint_axis_range(qq_x, qq_y, options.display_quantile)
+    qq_range = options.qq_limits or _joint_axis_range(
+        qq_x, qq_y, options.display_quantile
+    )
     fig.add_trace(
         go.Scatter(
             x=qq_x,
             y=qq_y,
             mode="lines",
             line={"color": cmp_color, "width": 1.4},
-            hovertemplate="Comparison Q: %{x:.4g}<br>Reference Q: %{y:.4g}<extra></extra>",
+            hovertemplate=(
+                "Comparison Q: %{x:.4g}<br>Reference Q: %{y:.4g}<extra></extra>"
+            ),
             showlegend=False,
         ),
         row=2,
@@ -220,8 +234,16 @@ def build_multiplot(
                     f"{options.comparison_label}<br>{options.variable_label}",
                     "Diff.(%)",
                 ],
-                "fill_color": [CORPORATE_NEUTRAL, ref_color, cmp_color, CORPORATE_NEUTRAL],
-                "font": {"color": ["black", "white", "black", "black"], "size": 11},
+                "fill_color": [
+                    CORPORATE_NEUTRAL,
+                    ref_color,
+                    cmp_color,
+                    CORPORATE_NEUTRAL,
+                ],
+                "font": {
+                    "color": ["black", "white", "black", "black"],
+                    "size": 11,
+                },
                 "align": ["left", "center", "center", "center"],
                 "line_color": "black",
                 "height": 36,
@@ -303,12 +325,30 @@ def build_multiplot(
         col=1,
     )
 
+    title_text = options.title or f"Paired-Sample Comparison — {options.variable_label}"
+    if options.subtitle:
+        title_text += f"<br><sup>{options.subtitle}</sup>"
+
+    bottom_margin = 105
+    if options.footer_note:
+        bottom_margin += 30
+    if has_flag:
+        bottom_margin += 18
+
     fig.update_layout(
+        title={
+            "text": title_text,
+            "x": 0.01,
+            "xanchor": "left",
+            "y": 0.985,
+            "yanchor": "top",
+            "font": {"size": 20, "color": "#004967"},
+        },
         width=options.width,
         height=options.height,
         template="plotly_white",
         font={"family": "Arial, sans-serif", "size": 12, "color": "black"},
-        margin={"l": 70, "r": 35, "t": 25, "b": 80 if has_flag else 55},
+        margin={"l": 70, "r": 35, "t": 95, "b": bottom_margin},
         legend={
             "x": 0.985,
             "y": 0.985,
@@ -322,17 +362,33 @@ def build_multiplot(
         hovermode="closest",
     )
 
+    footer_y = -0.065
+    if options.footer_note:
+        fig.add_annotation(
+            x=0.0,
+            y=footer_y,
+            xref="paper",
+            yref="paper",
+            text=options.footer_note,
+            showarrow=False,
+            xanchor="left",
+            yanchor="top",
+            align="left",
+            font={"size": 9.5, "color": "#53636C"},
+        )
+        footer_y -= 0.035
+
     if has_flag:
         fig.add_annotation(
-            x=0.75,
-            y=-0.045,
+            x=0.0,
+            y=footer_y,
             xref="paper",
             yref="paper",
             text="† Diff.(%) suppressed: reference denominator is near zero.",
             showarrow=False,
-            xanchor="center",
+            xanchor="left",
             yanchor="top",
-            font={"size": 10, "color": "#555555"},
+            font={"size": 9.5, "color": "#555555"},
         )
 
     return fig
@@ -360,7 +416,9 @@ def _joint_axis_range(
     display_quantile: float | None,
     include_zero: bool = True,
 ) -> tuple[float, float]:
-    combined = np.concatenate((np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)))
+    combined = np.concatenate(
+        (np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64))
+    )
     combined = combined[np.isfinite(combined)]
     if combined.size == 0:
         return (0.0, 1.0)
@@ -411,7 +469,9 @@ def _least_occupied_annotation_position(
     scored = []
     for candidate in candidates:
         _, _, _, _, xmin, xmax, ymin, ymax = candidate
-        count = int(np.sum((xn >= xmin) & (xn <= xmax) & (yn >= ymin) & (yn <= ymax)))
+        count = int(
+            np.sum((xn >= xmin) & (xn <= xmax) & (yn >= ymin) & (yn <= ymax))
+        )
         scored.append((count, candidate))
     _, best = min(scored, key=lambda item: item[0])
     return best[0], best[1], best[2], best[3]
@@ -460,7 +520,7 @@ class PairLocationPlotOptions:
     variable_label: str = "Variable"
     search_distance: float = math.nan
     colors: tuple[str, str] = CORPORATE_PALETTE
-    height: int = 620
+    height: int = 650
 
 
 def build_pair_location_plot(
@@ -473,12 +533,13 @@ def build_pair_location_plot(
     comparison_ids: np.ndarray,
     options: PairLocationPlotOptions,
 ) -> go.Figure:
-    """Plot the exact analysis-valid sample pairs in XY, XZ, or YZ projection.
+    """Plot exact analysis-valid pairs with a cartographic XY plan view.
 
-    Each pair is represented by a light connector between its reference and
-    comparison locations, with the two series overlaid as distinct markers.
-    The plot uses the original mapped coordinates for visualization; the
-    pairing engine may independently ignore Z when 2D search mode is enabled.
+    XY is rendered as a map-style technical plan with equal coordinate scale,
+    north arrow, scale bar, frame, coordinate grid and legend. XZ and YZ retain
+    the same visual language as technical sections. A web basemap is deliberately
+    not used because the application accepts arbitrary local/projected mine grids
+    and does not require a CRS definition.
     """
     ref = np.asarray(reference_coordinates, dtype=np.float64)
     cmp = np.asarray(comparison_coordinates, dtype=np.float64)
@@ -558,8 +619,8 @@ def build_pair_location_plot(
             mode="lines",
             line={"color": "rgba(68,84,106,0.28)", "width": 1.1},
             hoverinfo="skip",
-            showlegend=False,
-            name="Pair connection",
+            showlegend=True,
+            name="Pair connector",
         )
     )
     fig.add_trace(
@@ -573,8 +634,8 @@ def build_pair_location_plot(
                 "size": 8,
                 "color": ref_color,
                 "symbol": "circle",
-                "opacity": 0.90,
-                "line": {"color": "white", "width": 0.7},
+                "opacity": 0.92,
+                "line": {"color": "white", "width": 0.8},
             },
             hovertemplate=(
                 "Pair %{customdata[0]:,.0f}<br>"
@@ -597,8 +658,8 @@ def build_pair_location_plot(
                 "size": 8,
                 "color": cmp_color,
                 "symbol": "diamond",
-                "opacity": 0.90,
-                "line": {"color": "white", "width": 0.7},
+                "opacity": 0.92,
+                "line": {"color": "white", "width": 0.8},
             },
             hovertemplate=(
                 "Pair %{customdata[0]:,.0f}<br>"
@@ -610,6 +671,10 @@ def build_pair_location_plot(
             ),
         )
     )
+
+    x_values = np.concatenate((ref[:, x_axis], cmp[:, x_axis]))
+    y_values = np.concatenate((ref[:, y_axis], cmp[:, y_axis]))
+    x_range, y_range = _map_ranges(x_values, y_values)
 
     fig.update_layout(
         title={
@@ -623,35 +688,210 @@ def build_pair_location_plot(
         },
         height=options.height,
         template="plotly_white",
-        plot_bgcolor="#FFFFFF",
+        plot_bgcolor=MAP_BACKGROUND,
         paper_bgcolor="#FFFFFF",
         font={"family": "Arial, sans-serif", "size": 12, "color": "#26323A"},
-        margin={"l": 70, "r": 35, "t": 80, "b": 70},
+        margin={"l": 75, "r": 45, "t": 92, "b": 78},
         legend={
-            "orientation": "h",
-            "y": 1.02,
-            "x": 1.0,
-            "xanchor": "right",
-            "yanchor": "bottom",
-            "bgcolor": "rgba(255,255,255,0.78)",
-            "bordercolor": "rgba(0,84,124,0.15)",
+            "orientation": "v",
+            "y": 0.985,
+            "x": 0.015,
+            "xanchor": "left",
+            "yanchor": "top",
+            "bgcolor": "rgba(255,255,255,0.88)",
+            "bordercolor": "rgba(0,84,124,0.22)",
             "borderwidth": 1,
+            "font": {"size": 11},
         },
         hovermode="closest",
     )
     fig.update_xaxes(
         title_text=f"{axis_labels[x_axis]} (m)",
+        range=x_range,
         showgrid=True,
-        gridcolor=CORPORATE_GRID,
+        gridcolor=MAP_GRID,
+        gridwidth=1,
         zeroline=False,
         constrain="domain",
+        showline=True,
+        mirror=True,
+        linecolor=MAP_FRAME,
+        linewidth=1.2,
+        ticks="outside",
+        tickcolor=MAP_FRAME,
+        tickformat=",.0f",
     )
     fig.update_yaxes(
         title_text=f"{axis_labels[y_axis]} (m)",
+        range=y_range,
         showgrid=True,
-        gridcolor=CORPORATE_GRID,
+        gridcolor=MAP_GRID,
+        gridwidth=1,
         zeroline=False,
         scaleanchor="x",
         scaleratio=1,
+        showline=True,
+        mirror=True,
+        linecolor=MAP_FRAME,
+        linewidth=1.2,
+        ticks="outside",
+        tickcolor=MAP_FRAME,
+        tickformat=",.0f",
     )
+
+    if projection == "XY":
+        _add_north_arrow(fig, x_range, y_range)
+        _add_scale_bar(fig, x_range, y_range)
+    else:
+        _add_section_orientation(fig, projection, x_range, y_range)
+
     return fig
+
+
+def _map_ranges(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    padding_fraction: float = 0.06,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return padded display ranges while preserving meaningful metric extents."""
+    xmin = float(np.min(x_values))
+    xmax = float(np.max(x_values))
+    ymin = float(np.min(y_values))
+    ymax = float(np.max(y_values))
+    x_span = xmax - xmin
+    y_span = ymax - ymin
+    if math.isclose(x_span, 0.0):
+        x_span = max(abs(xmin), 1.0) * 0.10
+    if math.isclose(y_span, 0.0):
+        y_span = max(abs(ymin), 1.0) * 0.10
+    return (
+        (xmin - padding_fraction * x_span, xmax + padding_fraction * x_span),
+        (ymin - padding_fraction * y_span, ymax + padding_fraction * y_span),
+    )
+
+
+def _nice_scale_length(target: float) -> float:
+    """Round a target map scale length to a conventional 1/2/5 × 10^n value."""
+    if not np.isfinite(target) or target <= 0:
+        return 1.0
+    exponent = math.floor(math.log10(target))
+    fraction = target / (10**exponent)
+    if fraction < 1.5:
+        nice_fraction = 1.0
+    elif fraction < 3.5:
+        nice_fraction = 2.0
+    elif fraction < 7.5:
+        nice_fraction = 5.0
+    else:
+        nice_fraction = 10.0
+    return nice_fraction * (10**exponent)
+
+
+def _add_scale_bar(
+    fig: go.Figure,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+) -> None:
+    """Add a metric scale bar to the XY plan view."""
+    x_span = x_range[1] - x_range[0]
+    y_span = y_range[1] - y_range[0]
+    length = _nice_scale_length(x_span * 0.18)
+    x0 = x_range[0] + 0.065 * x_span
+    x1 = x0 + length
+    y0 = y_range[0] + 0.075 * y_span
+    tick = 0.012 * y_span
+
+    fig.add_shape(
+        type="line",
+        x0=x0,
+        x1=x1,
+        y0=y0,
+        y1=y0,
+        xref="x",
+        yref="y",
+        line={"color": "#26323A", "width": 5},
+        layer="above",
+    )
+    for x_value in (x0, x1):
+        fig.add_shape(
+            type="line",
+            x0=x_value,
+            x1=x_value,
+            y0=y0 - tick,
+            y1=y0 + tick,
+            xref="x",
+            yref="y",
+            line={"color": "#26323A", "width": 2},
+            layer="above",
+        )
+    fig.add_annotation(
+        x=(x0 + x1) / 2,
+        y=y0 + 0.020 * y_span,
+        xref="x",
+        yref="y",
+        text=f"<b>{length:,.0f} m</b>",
+        showarrow=False,
+        xanchor="center",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.78)",
+        borderpad=2,
+        font={"size": 10, "color": "#26323A"},
+    )
+
+
+def _add_north_arrow(
+    fig: go.Figure,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+) -> None:
+    """Add a conventional north arrow in the upper-right map corner."""
+    x_span = x_range[1] - x_range[0]
+    y_span = y_range[1] - y_range[0]
+    north_x = x_range[1] - 0.07 * x_span
+    north_y = y_range[1] - 0.06 * y_span
+    fig.add_annotation(
+        x=north_x,
+        y=north_y,
+        xref="x",
+        yref="y",
+        text="<b>N</b>",
+        showarrow=True,
+        arrowhead=3,
+        arrowsize=1.3,
+        arrowwidth=2.2,
+        arrowcolor="#26323A",
+        ax=0,
+        ay=48,
+        font={"size": 15, "color": "#26323A"},
+        bgcolor="rgba(255,255,255,0.72)",
+        borderpad=2,
+    )
+
+
+def _add_section_orientation(
+    fig: go.Figure,
+    projection: str,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+) -> None:
+    """Add a compact orientation cue to XZ/YZ technical sections."""
+    x_span = x_range[1] - x_range[0]
+    y_span = y_range[1] - y_range[0]
+    label = "Elevation ↑" if projection in {"XZ", "YZ"} else ""
+    if not label:
+        return
+    fig.add_annotation(
+        x=x_range[1] - 0.03 * x_span,
+        y=y_range[1] - 0.035 * y_span,
+        xref="x",
+        yref="y",
+        text=f"<b>{label}</b>",
+        showarrow=False,
+        xanchor="right",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.80)",
+        bordercolor="rgba(82,103,115,0.25)",
+        borderwidth=1,
+        borderpad=4,
+        font={"size": 10, "color": "#526773"},
+    )
