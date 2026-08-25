@@ -1,152 +1,299 @@
 # Pairing Analysis APP
 
-A production-oriented Python/Streamlit port of **GETPAIRS v2.000** (C. Neufeld, 2006) with paired-sample spatial and statistical comparison workflows.
+A production-oriented Python/Streamlit application for spatial paired-sample analysis, based on the FORTRAN **GETPAIRS** program.
 
-## What it does
+The application combines legacy-compatible spatial pairing with modern statistical comparison, interactive spatial QA/QC, categorical filtering, and export-ready reporting.
+
+## Main capabilities
 
 - Loads two datasets in GSLIB/GeoEAS (`.dat`, `.out`), CSV, or Excel format.
-- Reproduces the GETPAIRS reference/comparison direction: dataset 1 drives the outer loop and is plotted on **Y**; dataset 2 is searched and plotted on **X**.
-- Uses a 3D spherical maximum distance with the legacy strict predicate `distance_squared < dismax**2`.
-- Supports **all neighbors within radius** or **nearest neighbor only**, preserving the two GETPAIRS `ikeepclose` modes.
-- Preserves dataset-2 reuse; no one-to-one assignment is imposed.
-- Reproduces the legacy shared-axis quirk and exposes a clear **2D search (ignore Z)** control.
-- Displays the exact analysis-valid spatial pairs in an interactive location plot, defaulting to **XY Plan View** with optional **XZ** and **YZ** section views.
-- Produces a four-panel Plotly comparison figure: KDE density scatter, CDF, Q-Q, and statistics table.
-- Uses the corporate palette by default: blue `#03547C`, gold `#A39161`, orange `#FDB813`, and gray `#C7C8CA`.
+- Preserves the GETPAIRS reference/comparison direction:
+  - **Reference** dataset drives the outer loop and is plotted on **Y**.
+  - **Comparison** dataset is searched and plotted on **X**.
+- Uses a spherical search radius with the strict legacy predicate `distance_squared < dismax^2`.
+- Supports **All neighbors within radius** (`ikeepclose=0`) and **Nearest neighbor only** (`ikeepclose=1`).
+- Allows comparison records to be reused by multiple reference records; no global 1:1 assignment is imposed.
+- Supports full 3D search or **2D search (ignore Z)**.
+- Provides explicit variable mapping for both datasets.
+- Supports optional valid-assay, grade-range, and **categorical variable** filtering.
+- Displays the exact analysis-valid paired samples used in the calculations.
+- Provides an interactive spatial pair-location figure with **XY Plan View** by default and optional **XZ** and **YZ** section views.
+- Adds map-style elements to the XY view: north arrow, automatic scale bar, coordinate grid, pair connectors, legend, and equal spatial aspect ratio.
+- Produces a report-grade paired-sample comparison figure containing KDE density scatter, empirical CDFs, Q-Q plot, and comparative statistics.
+- Automatically adds a descriptive figure title and a footer summarizing the active analysis filters.
 - Exports paired CSV, legacy-style GSLIB, statistics CSV, Plotly HTML, PNG, and `getpairs.par`.
 
-## Install and run
+## Installation
+
+Recommended Python version:
+
+```text
+Python 3.11
+```
+
+Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
+```
 
+Windows:
+
+```bash
+.venv\Scripts\activate
+```
+
+macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
+```
+
+Run the application:
+
+```bash
 streamlit run app.py
 ```
 
 ## Recommended workflow
 
-1. Upload Dataset A and Dataset B.
-2. Choose which dataset is the **Reference** (outer loop / Y axis).
-3. Map X, Y, Z for each dataset. Turn on **2D search (ignore Z)** when required.
-4. Select the analysis variable and map the corresponding variable column in both datasets.
-5. Set the maximum search distance and pairing mode.
-6. Keep **valid assay only** enabled to reproduce the Pueblo Viejo study logic.
-7. Optionally filter by domain/lithology or grade range.
-8. Review the paired-sample location plot (XY by default; XZ/YZ available when mapped coordinates are valid).
-9. Review the paired-sample comparison figure and pairing report, then download the outputs.
+1. Upload **Dataset A** and **Dataset B**.
+2. Select which dataset is the **Reference** dataset.
+3. Map the sample/hole ID and X, Y, Z coordinates for each dataset.
+4. Enable **2D search (ignore Z)** if the analysis should be performed in plan only.
+5. Select the analysis variable and map the corresponding column in both datasets.
+6. Define the maximum search distance.
+7. Select the pairing rule: **All neighbors within radius** or **Nearest neighbor only**.
+8. Configure optional eligibility filters: valid assays, grade range, and categorical variable.
+9. Enter short series names for the plots and statistics table, for example `Historical RC`, `Recent RC`, `Campaign A`, or `Campaign B`.
+10. Review the **Spatial Pair Locations** figure.
+11. Review the paired-sample comparison figure and Pairing Report.
+12. Export the required tables, plots, or legacy parameter file.
 
+## Categorical Variable Filter
 
-## Included 100-record demo datasets
+The application can restrict the analysis to one or more categories before spatial pairing.
 
-The `data/` folder includes two CSV files designed specifically for testing the app with a **2.0 m** maximum search distance:
+Typical examples include:
 
-- `demo_reference_100.csv`
-- `demo_comparison_100.csv`
+- Lithology
+- Domain
+- Alteration
+- Weathering
+- Sample type
+- Drilling campaign
+- Year
+- Any other categorical or low-cardinality coded field
 
-Recommended mapping: `x`, `y`, `z`; choose `demo_reference_100.csv` as the **Reference** dataset. The files include the standard geochemical fields used by the app (`au_ppm`, `ag_ppm`, `s_tot_pct`, `s2_pct`, `c_tot_pct`, `c_org_pct`, `cu_pct`, `zn_pct`, `cao_pct`, `sio2_pct`) plus numeric `lithology` and `domain` codes. Lithology codes are `1=DIO`, `2=GAB`, `3=MDI`; domain codes are `1–3`. All fields are numeric so the paired result can also be exported to legacy GSLIB.
+The categorical field can be mapped independently in Dataset A and Dataset B. This is useful when equivalent fields have different column names in the two input datasets.
 
-Expected pairing diagnostics at `dismax = 2.0 m` using the strict GETPAIRS rule (`distance < 2.0 m`):
+Only records belonging to the selected categories remain eligible for pairing.
 
-| Mode | Pairs | Pairing rate | Unpaired reference | Reused comparison records | Mean distance | Max distance |
-|---|---:|---:|---:|---:|---:|---:|
-| All pairs | 93 | 90.00% | 10 | 5 | 1.07 m | 1.75 m |
-| Closest only | 90 | 90.00% | 10 | 2 | 1.05 m | 1.75 m |
+## Spatial Pair Locations
 
-Five reference/comparison cases are exactly **2.000 m** apart and are deliberately excluded, and another five are **2.500 m** apart. The first ten records also contain engineered multi-candidate/reuse cases so that both pairing modes can be exercised.
+The spatial figure shows the **exact pairs used in the statistical analysis**, after applying the distance criterion and all active eligibility filters.
 
-## Legacy compatibility notes
+### XY Plan View
+
+The default XY view is presented as a technical map-style figure and includes:
+
+- X/Y coordinate grid
+- north arrow
+- automatic metric scale bar
+- reference and comparison sample symbols
+- pair-connection lines
+- legend
+- equal X/Y spatial scale
+
+The figure intentionally does not use a geographic basemap because input coordinates may be local mine-grid or projected coordinates and the application does not currently require a CRS/EPSG definition.
+
+### XZ and YZ Sections
+
+When Z is available, the user can switch to:
+
+- **XZ Section**
+- **YZ Section**
+
+If the pairing search is set to **2D search (ignore Z)**, Z may still be displayed for spatial context but does not participate in pair acceptance.
+
+## Paired-Sample Comparison Figure
+
+The main comparison figure contains four analytical components:
+
+1. **Density scatterplot**
+   - Comparison values on X
+   - Reference values on Y
+   - 1:1 reference line
+   - sample count
+   - RMA slope
+   - Pearson correlation
+   - Spearman correlation
+   - mean pair separation
+2. **Empirical CDF** for the two paired distributions.
+3. **Q-Q plot** for direct quantile comparison.
+4. **Statistics table** with count, mean, stdev, CV, minimum, P10, P50, P90, maximum, and percentage difference.
+
+The figure title is generated from the selected variable and series names. A footer summarizes the active analytical conditions, including search radius, pairing rule, dimensionality, and active filters.
+
+## Pairing logic
 
 ### Strict radius
 
-GETPAIRS tests:
+GETPAIRS evaluates:
 
 ```text
 dis = (x1-x2)^2 + (y1-y2)^2 + (z1-z2)^2
 retain if dis < dismax^2
 ```
 
-A point exactly at `dismax` is excluded. The KD-tree is only a candidate-search accelerator; every candidate is rechecked using the strict squared-distance rule.
+A comparison sample exactly at `dismax` is excluded.
 
-### Closest-only ties
+The Python implementation uses `scipy.spatial.cKDTree` to accelerate neighbor searches, while final candidate acceptance still follows the strict squared-distance rule.
 
-The FORTRAN updates the closest pair only when `dis < dclose`. Therefore equal-distance ties retain the first dataset-2 record encountered. The Python implementation explicitly restores that first-occurrence rule after `cKDTree.query()`.
+### All neighbors within radius
 
-### Dataset-2 reuse
+Equivalent to:
 
-No 1:1 constraint exists. One comparison record may be paired to multiple reference records. The app reports how many comparison records are reused and how many extra reuse assignments occur.
+```text
+ikeepclose = 0
+```
 
-### Coordinate quirk / 2D mode
+Every comparison record satisfying the search radius is retained. One reference record may therefore generate multiple paired rows.
 
-In the FORTRAN, an axis is populated only when the corresponding column index is greater than zero in **both** files. Otherwise that axis is zeroed in both datasets. The engine preserves this behavior. The UI exposes the common case as **2D search (ignore Z)**.
+### Nearest neighbor only
 
-### Assay validity / trimming
+Equivalent to:
 
-The old `tmin` filter is commented out in GETPAIRS. The app makes assay-validity and grade-range trimming explicit, user-controlled preprocessing. The default **valid assay only** setting matches the reference study statement that only valid assays for the evaluated variable were used.
+```text
+ikeepclose = 1
+```
+
+At most one comparison record is retained for each reference record: the closest candidate inside the search radius.
+
+For exact equal-distance ties, the first comparison record encountered is retained, matching the legacy FORTRAN logic.
+
+### Comparison-record reuse
+
+The analysis does not impose a global one-to-one matching constraint. A comparison record may therefore be paired to more than one reference record. The Pairing Report explicitly summarizes comparison-record reuse.
+
+### Coordinate behavior
+
+The legacy implementation only activates a coordinate axis when the corresponding coordinate column is available in both datasets.
+
+The modern interface preserves this behavior while exposing the common workflow explicitly through **2D search (ignore Z)**.
+
+## Eligibility filters
+
+### Valid assay only
+
+When enabled, non-finite values for the selected analytical variable are removed before spatial pairing.
+
+### Grade-range filter
+
+The user may define a minimum and maximum analytical value. Records outside that range are excluded before pairing.
+
+### Categorical Variable Filter
+
+The user may select a categorical field and one or more permitted category values independently for both datasets.
+
+All active eligibility filters are summarized in the comparison-figure footer.
 
 ## Statistics
 
-Default study table order:
+The default statistics order is:
 
-`count, mean, stdev, cv, min, P10, P50, P90, max`
+```text
+count, mean, stdev, cv, min, P10, P50, P90, max
+```
 
-`Diff.(%) = (comparison - reference) / reference * 100`
+Percentage difference is calculated as:
 
-Near-zero reference denominators are suppressed and marked instead of displaying unstable percentages. The guard is scaled to the reference variable magnitude and remains available under Advanced display.
+```text
+Diff.(%) = (comparison - reference) / reference * 100
+```
 
-The scatter annotation coefficient `c` is implemented exactly as requested as the **Reduced Major Axis (RMA)** slope:
+Near-zero reference denominators are suppressed rather than displaying unstable percentage values.
+
+The scatterplot coefficient `c` is the **Reduced Major Axis (RMA)** slope:
 
 ```text
 c = sign(r) * s_reference / s_comparison
 ```
 
-where `r` is the Pearson correlation.
+where `r` is the Pearson correlation coefficient.
 
-## Tests
+## Outputs
 
-Run:
+The application can generate:
 
-```bash
-pytest -q
-```
+- Paired CSV
+- Paired GSLIB/GeoEAS
+- Statistics CSV
+- Spatial Pair Locations HTML
+- Spatial Pair Locations PNG
+- Comparison Figure HTML
+- Presentation-ready PNG
+- `getpairs.par`
 
-The core test compares the KD-tree pair set against a literal O(n1×n2) brute-force implementation, including strict-radius exclusion, closest-mode tie handling, record reuse, and the shared-axis 2D quirk.
+### GSLIB export limitation
 
-## Project structure
+Legacy GSLIB/GeoEAS rows are numeric.
 
-The premium version uses a layered application structure: a minimal Streamlit entry point, a UI layer, an analytical core, and an independent test suite.
+If CSV or Excel inputs contain non-numeric fields, such as string sample IDs, the complete paired CSV remains available, but legacy GSLIB export may be unavailable unless those fields are converted or removed upstream.
+
+## Application architecture
+
+The project uses a layered Streamlit architecture:
 
 ```text
-app.py                    # Streamlit entry point only
+app.py
 src/
   core/
-    config.py             # getpairs.par import/export
-    io.py                 # GSLIB/CSV/Excel I/O and paired exports
-    pairing.py            # brute-force reference + cKDTree engine
-    statistics.py         # RMA/correlation/CDF/Q-Q/table metrics
-    plotting.py           # spatial pair-location plot + report-grade comparison figure
+    config.py
+    io.py
+    pairing.py
+    plotting.py
+    statistics.py
   ui/
-    page.py               # application workflow and controls
-    theme.py              # premium corporate UI components/CSS
-    palettes.py           # corporate and scientific palettes
-tests/                    # algorithm and I/O validation
-data/                     # synthetic/demo datasets
-.streamlit/config.toml    # Streamlit theme defaults
+    page.py
+    palettes.py
+    theme.py
+.streamlit/
+  config.toml
+README.md
 TECHNICAL_NOTE.md
 requirements.txt
 ```
 
-The analytical core has no dependency on Streamlit; the UI calls the core rather than embedding pairing or statistics logic in the page code.
+### Core layer
 
-## GSLIB export limitation
+`src/core/` contains parameter-file handling, data input/output, spatial pairing, statistics, and plotting. The analytical core is independent of Streamlit.
 
-Legacy GSLIB/GeoEAS data rows are numeric. If CSV/Excel inputs contain non-numeric fields (for example string hole IDs), the app still exports the full paired CSV but disables legacy GSLIB output until those fields are numeric or removed upstream.
+### UI layer
 
+`src/ui/` contains the Streamlit workflow, controls, page composition, figure palettes, and application styling.
+
+This separation keeps the pairing and statistical logic independent from presentation code.
+
+## Streamlit deployment
+
+For Streamlit Community Cloud use:
+
+```text
+Repository: juliocesarsolano/Pairing_Analysis
+Branch: main
+Main file path: app.py
+Python version: 3.11
+```
+
+No external API keys are required by the application.
 
 ## Author
 
-Julio Solano
+**Julio Solano**
