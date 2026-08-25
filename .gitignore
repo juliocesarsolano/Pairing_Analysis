@@ -1,0 +1,96 @@
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local Python environments and temporary dependency folders
+.venv/
+venv/
+env/
+.runtime/
+.testdeps/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+secrets.toml
+*.pem
+*.key
+
+# User block-model data and tabulations
+*.csv
+*.for
+*.par
+*.tsv
+*.parquet
+*.feather
+*.arrow
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.pbix
+
+# Generated reports and office documents
+*.pdf
+*.doc
+*.PNG
+*.docx
+*.docm
+*.ppt
+*.pptx
+*.pptm
+*.odt
+*.ods
+*.rtf
+
+# Archives and exported packages
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+
+# Application-generated output folders
+outputs/
+output/
+reports/
+exports/
+temp/
+tmp/
+
+# Logs and operating-system files
+*.log
+*.tmp
+*.bak
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.code-workspace
+
+# Codex/local agent metadata
+.codex/
+.agents/
+
+# Docker/Azure/SPFx artifacts are not part of the standard Streamlit package
+Dockerfile
+.dockerignore
+backend/
+frontend/
+contracts/
