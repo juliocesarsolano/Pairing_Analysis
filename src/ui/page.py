@@ -288,8 +288,11 @@ def cached_multiplot(
     variable_label: str,
     colors: tuple[str, str],
     density_colorscale: str,
-    scatter_limits: tuple[float, float] | None,
-    qq_limits: tuple[float, float] | None,
+    scatter_x_limits: tuple[float, float] | None,
+    scatter_y_limits: tuple[float, float] | None,
+    qq_x_limits: tuple[float, float] | None,
+    qq_y_limits: tuple[float, float] | None,
+    link_xy_axes: bool,
     display_quantile: float | None,
     figure_title: str,
     figure_subtitle: str,
@@ -304,8 +307,11 @@ def cached_multiplot(
         mean_distance=float(np.mean(distances)) if distances.size else np.nan,
         colors=colors,
         density_colorscale=density_colorscale,
-        scatter_limits=scatter_limits,
-        qq_limits=qq_limits,
+        scatter_x_limits=scatter_x_limits,
+        scatter_y_limits=scatter_y_limits,
+        qq_x_limits=qq_x_limits,
+        qq_y_limits=qq_y_limits,
+        link_xy_axes=link_xy_axes,
         display_quantile=display_quantile,
         title=figure_title,
         subtitle=figure_subtitle,
@@ -642,8 +648,41 @@ def render_app() -> None:
                     step=0.001,
                     format="%.4f",
                 )
-            scatter_limits = _optional_limits("Scatter", "scatter")
-            qq_limits = _optional_limits("Q-Q", "qq")
+            st.markdown("**Axis ranges**")
+            link_xy_axes = st.checkbox(
+                "Link X and Y axes",
+                value=True,
+                key="link_xy_axes",
+                help=(
+                    "When enabled, each scatter/Q-Q plot uses one common X/Y range with a 1:1 scale. "
+                    "A custom X range is applied exactly to both axes. Disable this option to configure "
+                    "X and Y independently."
+                ),
+            )
+
+            st.caption("Density scatterplot")
+            scatter_x_limits = _optional_limits("Scatter X", "scatter")
+            if link_xy_axes:
+                scatter_y_limits = scatter_x_limits
+                if scatter_x_limits is not None:
+                    st.caption(
+                        f"Scatter Y is linked to X: {scatter_x_limits[0]:.4g} to "
+                        f"{scatter_x_limits[1]:.4g}."
+                    )
+            else:
+                scatter_y_limits = _optional_limits("Scatter Y", "scatter_y")
+
+            st.caption("Q-Q plot")
+            qq_x_limits = _optional_limits("Q-Q X", "qq")
+            if link_xy_axes:
+                qq_y_limits = qq_x_limits
+                if qq_x_limits is not None:
+                    st.caption(
+                        f"Q-Q Y is linked to X: {qq_x_limits[0]:.4g} to "
+                        f"{qq_x_limits[1]:.4g}."
+                    )
+            else:
+                qq_y_limits = _optional_limits("Q-Q Y", "qq_y")
 
     if reference_choice == "Dataset A":
         ref_table, cmp_table = table_a, table_b
@@ -788,8 +827,11 @@ def render_app() -> None:
         variable_label,
         palette.series,
         palette.density_scale,
-        scatter_limits,
-        qq_limits,
+        scatter_x_limits,
+        scatter_y_limits,
+        qq_x_limits,
+        qq_y_limits,
+        link_xy_axes,
         display_quantile,
         figure_title,
         figure_subtitle,
@@ -1360,7 +1402,12 @@ def _apply_eligibility_filters(
 
 
 def _optional_limits(label: str, key: str) -> tuple[float, float] | None:
-    enabled = st.checkbox(f"Custom {label} axis limits", value=False, key=f"{key}_limits_on")
+    """Render an optional exact axis-range control with strict min/max validation."""
+    enabled = st.checkbox(
+        f"Custom {label} axis limits",
+        value=False,
+        key=f"{key}_limits_on",
+    )
     if not enabled:
         return None
     col1, col2 = st.columns(2)

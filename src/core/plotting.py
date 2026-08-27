@@ -39,8 +39,11 @@ class PlotOptions:
     mean_distance: float
     colors: tuple[str, str] = CORPORATE_PALETTE
     density_colorscale: str = "Viridis"
-    scatter_limits: tuple[float, float] | None = None
-    qq_limits: tuple[float, float] | None = None
+    scatter_x_limits: tuple[float, float] | None = None
+    scatter_y_limits: tuple[float, float] | None = None
+    qq_x_limits: tuple[float, float] | None = None
+    qq_y_limits: tuple[float, float] | None = None
+    link_xy_axes: bool = True
     display_quantile: float | None = None
     title: str | None = None
     subtitle: str | None = None
@@ -73,9 +76,24 @@ def build_multiplot(
     )
 
     ref_color, cmp_color = options.colors
-    scatter_range = options.scatter_limits or _joint_axis_range(
-        x, y, options.display_quantile
-    )
+
+    if options.link_xy_axes:
+        scatter_common_range = (
+            options.scatter_x_limits
+            or options.scatter_y_limits
+            or _joint_axis_range(x, y, options.display_quantile)
+        )
+        scatter_x_range = scatter_common_range
+        scatter_y_range = scatter_common_range
+    else:
+        scatter_x_range = options.scatter_x_limits or _single_axis_range(
+            x, options.display_quantile
+        )
+        scatter_y_range = options.scatter_y_limits or _single_axis_range(
+            y, options.display_quantile
+        )
+
+    scatter_reference_range = _reference_line_range(scatter_x_range, scatter_y_range)
     density = _kde_density(x, y)
 
     # [1] Top-left: density scatterplot.
@@ -102,8 +120,8 @@ def build_multiplot(
     )
     fig.add_trace(
         go.Scatter(
-            x=list(scatter_range),
-            y=list(scatter_range),
+            x=list(scatter_reference_range),
+            y=list(scatter_reference_range),
             mode="lines",
             line={"color": "black", "width": 2},
             hoverinfo="skip",
@@ -132,7 +150,9 @@ def build_multiplot(
         col=1,
     )
 
-    annotation_position = _least_occupied_annotation_position(x, y, scatter_range)
+    annotation_position = _least_occupied_annotation_position(
+        x, y, scatter_reference_range
+    )
     metric_text = (
         f"<i>n</i> : {metrics.n:,}<br>"
         f"<i>c</i> : {_fmt_coeff(metrics.rma_slope)}<br>"
@@ -192,9 +212,23 @@ def build_multiplot(
 
     # [3] Bottom-left: Q-Q plot.
     qq_x, qq_y = qq_values(y, x)
-    qq_range = options.qq_limits or _joint_axis_range(
-        qq_x, qq_y, options.display_quantile
-    )
+    if options.link_xy_axes:
+        qq_common_range = (
+            options.qq_x_limits
+            or options.qq_y_limits
+            or _joint_axis_range(qq_x, qq_y, options.display_quantile)
+        )
+        qq_x_range = qq_common_range
+        qq_y_range = qq_common_range
+    else:
+        qq_x_range = options.qq_x_limits or _single_axis_range(
+            qq_x, options.display_quantile
+        )
+        qq_y_range = options.qq_y_limits or _single_axis_range(
+            qq_y, options.display_quantile
+        )
+
+    qq_reference_range = _reference_line_range(qq_x_range, qq_y_range)
     fig.add_trace(
         go.Scatter(
             x=qq_x,
@@ -211,8 +245,8 @@ def build_multiplot(
     )
     fig.add_trace(
         go.Scatter(
-            x=list(qq_range),
-            y=list(qq_range),
+            x=list(qq_reference_range),
+            y=list(qq_reference_range),
             mode="lines",
             line={"color": ref_color, "width": 1.4},
             hoverinfo="skip",
@@ -262,22 +296,29 @@ def build_multiplot(
     )
 
     # Axes and report-grade formatting.
+    scatter_axis_common = {
+        "autorange": False,
+        "showgrid": True,
+        "gridcolor": "rgba(0,0,0,0.12)",
+        "gridwidth": 1,
+        "layer": "below traces",
+        "zeroline": False,
+        "constrain": "domain",
+    }
     fig.update_xaxes(
         title_text=f"{options.comparison_label} {options.variable_label}",
-        range=scatter_range,
-        showgrid=False,
-        zeroline=False,
-        constrain="domain",
+        range=list(scatter_x_range),
+        **scatter_axis_common,
         row=1,
         col=1,
     )
+    scatter_y_axis = dict(scatter_axis_common)
+    if options.link_xy_axes:
+        scatter_y_axis.update({"scaleanchor": "x", "scaleratio": 1})
     fig.update_yaxes(
         title_text=f"{options.reference_label} {options.variable_label}",
-        range=scatter_range,
-        showgrid=False,
-        zeroline=False,
-        scaleanchor="x",
-        scaleratio=1,
+        range=list(scatter_y_range),
+        **scatter_y_axis,
         row=1,
         col=1,
     )
@@ -303,24 +344,29 @@ def build_multiplot(
         col=2,
     )
 
+    qq_axis_common = {
+        "autorange": False,
+        "showgrid": True,
+        "gridcolor": CORPORATE_GRID,
+        "gridwidth": 1,
+        "layer": "below traces",
+        "zeroline": False,
+        "constrain": "domain",
+    }
     fig.update_xaxes(
         title_text=f"{options.comparison_label} {options.variable_label}",
-        range=qq_range,
-        showgrid=True,
-        gridcolor=CORPORATE_GRID,
-        zeroline=False,
-        constrain="domain",
+        range=list(qq_x_range),
+        **qq_axis_common,
         row=2,
         col=1,
     )
+    qq_y_axis = dict(qq_axis_common)
+    if options.link_xy_axes:
+        qq_y_axis.update({"scaleanchor": "x3", "scaleratio": 1})
     fig.update_yaxes(
         title_text=f"{options.reference_label} {options.variable_label}",
-        range=qq_range,
-        showgrid=True,
-        gridcolor=CORPORATE_GRID,
-        zeroline=False,
-        scaleanchor="x3",
-        scaleratio=1,
+        range=list(qq_y_range),
+        **qq_y_axis,
         row=2,
         col=1,
     )
@@ -424,6 +470,49 @@ def _kde_density(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     ranked = np.empty_like(density)
     ranked[order] = density[order]
     return ranked
+
+
+def _single_axis_range(
+    values: np.ndarray,
+    display_quantile: float | None,
+    include_zero: bool = True,
+) -> tuple[float, float]:
+    """Return a display range for one axis without coupling it to another axis."""
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return (0.0, 1.0)
+
+    if display_quantile is not None:
+        if not 0.5 < display_quantile < 1.0:
+            raise ValueError("display_quantile must be between 0.5 and 1.0.")
+        lower_q = 1.0 - display_quantile
+        lower = float(np.quantile(finite, lower_q))
+        upper = float(np.quantile(finite, display_quantile))
+    else:
+        lower = float(np.min(finite))
+        upper = float(np.max(finite))
+
+    if include_zero and lower >= 0.0:
+        lower = 0.0
+    if math.isclose(lower, upper):
+        span = max(abs(lower), 1.0)
+        lower -= 0.05 * span
+        upper += 0.05 * span
+    else:
+        span = upper - lower
+        if lower < 0.0:
+            lower -= 0.02 * span
+        upper += 0.02 * span
+    return (lower, upper)
+
+
+def _reference_line_range(
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+) -> tuple[float, float]:
+    """Return a 1:1 line span covering the complete requested X/Y ranges."""
+    return (min(x_range[0], y_range[0]), max(x_range[1], y_range[1]))
 
 
 def _joint_axis_range(
