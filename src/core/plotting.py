@@ -45,8 +45,8 @@ class PlotOptions:
     title: str | None = None
     subtitle: str | None = None
     footer_note: str | None = None
-    width: int = 1000
-    height: int = 1000
+    width: int = 920
+    height: int = 900
 
 
 def build_multiplot(
@@ -67,7 +67,7 @@ def build_multiplot(
         cols=2,
         specs=[[{"type": "xy"}, {"type": "xy"}], [{"type": "xy"}, {"type": "table"}]],
         horizontal_spacing=0.10,
-        vertical_spacing=0.10,
+        vertical_spacing=0.20,
         column_widths=[0.52, 0.48],
         row_heights=[0.52, 0.48],
     )
@@ -85,7 +85,7 @@ def build_multiplot(
             y=y,
             mode="markers",
             marker={
-                "size": 6,
+                "size": 9.5,
                 "color": density,
                 "colorscale": options.density_colorscale,
                 "showscale": False,
@@ -120,13 +120,13 @@ def build_multiplot(
     )
     fig.add_annotation(
         x=0.02,
-        y=0.98,
+        y=1.025,
         xref="x domain",
         yref="y domain",
         text=mean_distance_text,
         showarrow=False,
         xanchor="left",
-        yanchor="top",
+        yanchor="bottom",
         font={"size": 13, "color": "black"},
         row=1,
         col=1,
@@ -153,7 +153,7 @@ def build_multiplot(
         bordercolor="rgba(80,80,80,0.35)",
         borderwidth=1,
         borderpad=4,
-        font={"size": 12, "color": "black"},
+        font={"size": 13, "color": "black"},
         row=1,
         col=1,
     )
@@ -226,7 +226,7 @@ def build_multiplot(
     table_values, has_flag = _format_statistics_for_plot(statistics_table)
     fig.add_trace(
         go.Table(
-            columnwidth=[0.55, 1.35, 1.35, 1.00],
+            columnwidth=[0.52, 1.28, 1.28, 0.95],
             header={
                 "values": [
                     "",
@@ -242,19 +242,19 @@ def build_multiplot(
                 ],
                 "font": {
                     "color": ["black", "white", "black", "black"],
-                    "size": 11,
+                    "size": 13,
                 },
                 "align": ["left", "center", "center", "center"],
                 "line_color": "black",
-                "height": 36,
+                "height": 32,
             },
             cells={
                 "values": table_values,
                 "fill_color": "white",
                 "align": ["left", "center", "center", "center"],
-                "font": {"size": 11, "color": "black"},
+                "font": {"size": 13, "color": "black"},
                 "line_color": "black",
-                "height": 34,
+                "height": 22,
             },
         ),
         row=2,
@@ -329,9 +329,9 @@ def build_multiplot(
     if options.subtitle:
         title_text += f"<br><sup>{options.subtitle}</sup>"
 
-    bottom_margin = 105
+    bottom_margin = 125
     if options.footer_note:
-        bottom_margin += 30
+        bottom_margin += 48
     if has_flag:
         bottom_margin += 18
 
@@ -347,7 +347,7 @@ def build_multiplot(
         width=options.width,
         height=options.height,
         template="plotly_white",
-        font={"family": "Arial, sans-serif", "size": 12, "color": "black"},
+        font={"family": "Arial, sans-serif", "size": 13, "color": "black"},
         margin={"l": 70, "r": 35, "t": 95, "b": bottom_margin},
         legend={
             "x": 0.985,
@@ -357,26 +357,33 @@ def build_multiplot(
             "bgcolor": "rgba(255,255,255,0.75)",
             "bordercolor": "rgba(120,120,120,0.35)",
             "borderwidth": 1,
-            "font": {"size": 11},
+            "font": {"size": 13},
         },
         hovermode="closest",
     )
 
-    footer_y = -0.065
+    # Preserve the original, roomier analytical-panel geometry. Only the
+    # statistics table keeps a slightly extended vertical domain so its
+    # final row remains fully visible in responsive rendering and exports.
+    table_trace = next((trace for trace in fig.data if isinstance(trace, go.Table)), None)
+    if table_trace is not None:
+        table_trace.domain.y = [0.035, 0.485]
+
+    footer_y = -0.075
     if options.footer_note:
         fig.add_annotation(
             x=0.0,
             y=footer_y,
             xref="paper",
             yref="paper",
-            text=options.footer_note,
+            text=_format_footer_annotation(options.footer_note),
             showarrow=False,
             xanchor="left",
             yanchor="top",
             align="left",
-            font={"size": 9.5, "color": "#53636C"},
+            font={"size": 12.5, "color": "#53636C"},
         )
-        footer_y -= 0.035
+        footer_y -= 0.065
 
     if has_flag:
         fig.add_annotation(
@@ -388,10 +395,19 @@ def build_multiplot(
             showarrow=False,
             xanchor="left",
             yanchor="top",
-            font={"size": 9.5, "color": "#555555"},
+            font={"size": 12, "color": "#555555"},
         )
 
     return fig
+
+
+def _format_footer_annotation(text: str) -> str:
+    """Wrap a long filter summary onto two readable lines."""
+    parts = [part.strip() for part in str(text).split(" · ") if part.strip()]
+    if len(parts) <= 3:
+        return " · ".join(parts)
+    split_at = max(2, (len(parts) + 1) // 2)
+    return " · ".join(parts[:split_at]) + "<br>" + " · ".join(parts[split_at:])
 
 
 def _kde_density(x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -631,7 +647,7 @@ def build_pair_location_plot(
             name=options.reference_label,
             customdata=reference_custom,
             marker={
-                "size": 8,
+                "size": 10,
                 "color": ref_color,
                 "symbol": "circle",
                 "opacity": 0.92,
@@ -655,7 +671,7 @@ def build_pair_location_plot(
             name=options.comparison_label,
             customdata=comparison_custom,
             marker={
-                "size": 8,
+                "size": 10,
                 "color": cmp_color,
                 "symbol": "diamond",
                 "opacity": 0.92,
@@ -690,7 +706,7 @@ def build_pair_location_plot(
         template="plotly_white",
         plot_bgcolor=MAP_BACKGROUND,
         paper_bgcolor="#FFFFFF",
-        font={"family": "Arial, sans-serif", "size": 12, "color": "#26323A"},
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#26323A"},
         margin={"l": 75, "r": 45, "t": 92, "b": 78},
         legend={
             "orientation": "v",
@@ -701,7 +717,7 @@ def build_pair_location_plot(
             "bgcolor": "rgba(255,255,255,0.88)",
             "bordercolor": "rgba(0,84,124,0.22)",
             "borderwidth": 1,
-            "font": {"size": 11},
+            "font": {"size": 13},
         },
         hovermode="closest",
     )
@@ -835,7 +851,7 @@ def _add_scale_bar(
         yanchor="bottom",
         bgcolor="rgba(255,255,255,0.78)",
         borderpad=2,
-        font={"size": 10, "color": "#26323A"},
+        font={"size": 11, "color": "#26323A"},
     )
 
 
@@ -862,7 +878,7 @@ def _add_north_arrow(
         arrowcolor="#26323A",
         ax=0,
         ay=48,
-        font={"size": 15, "color": "#26323A"},
+        font={"size": 16, "color": "#26323A"},
         bgcolor="rgba(255,255,255,0.72)",
         borderpad=2,
     )
@@ -893,5 +909,134 @@ def _add_section_orientation(
         bordercolor="rgba(82,103,115,0.25)",
         borderwidth=1,
         borderpad=4,
-        font={"size": 10, "color": "#526773"},
+        font={"size": 11, "color": "#526773"},
     )
+
+
+def build_pairing_sensitivity_plot(
+    sensitivity: pd.DataFrame,
+    selected_distance: float,
+    pairing_mode: str,
+    search_geometry: str,
+    colors: tuple[str, str] = CORPORATE_PALETTE,
+) -> go.Figure:
+    """Plot pair count and reference pairing rate versus search distance."""
+    required = {
+        "search_distance_m",
+        "pairs",
+        "pairing_rate_pct",
+    }
+    missing = required.difference(sensitivity.columns)
+    if missing:
+        raise ValueError(
+            "Pairing sensitivity data are missing required columns: "
+            + ", ".join(sorted(missing))
+        )
+    if sensitivity.empty:
+        raise ValueError("Pairing sensitivity plot requires at least one search distance.")
+
+    frame = sensitivity.sort_values("search_distance_m").reset_index(drop=True)
+    ref_color, cmp_color = colors
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=frame["search_distance_m"],
+            y=frame["pairs"],
+            mode="lines+markers",
+            name="Pairs",
+            line={"color": cmp_color, "width": 2.2},
+            marker={"size": 9},
+            hovertemplate=(
+                "Search distance: %{x:.2f} m<br>"
+                "Pairs: %{y:,.0f}<extra></extra>"
+            ),
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["search_distance_m"],
+            y=frame["pairing_rate_pct"],
+            mode="lines+markers",
+            name="Pairing rate",
+            line={"color": ref_color, "width": 2.2},
+            marker={"size": 9, "symbol": "diamond"},
+            hovertemplate=(
+                "Search distance: %{x:.2f} m<br>"
+                "Pairing rate: %{y:.2f}%<extra></extra>"
+            ),
+        ),
+        secondary_y=True,
+    )
+
+    if np.isfinite(selected_distance) and selected_distance > 0.0:
+        fig.add_vline(
+            x=float(selected_distance),
+            line_width=1.4,
+            line_dash="dash",
+            line_color="#5B6570",
+        )
+        fig.add_annotation(
+            x=float(selected_distance),
+            y=1.02,
+            xref="x",
+            yref="paper",
+            text=f"Selected = {selected_distance:.2f} m",
+            showarrow=False,
+            xanchor="center",
+            yanchor="bottom",
+            font={"size": 11, "color": "#4B5660"},
+            bgcolor="rgba(255,255,255,0.86)",
+        )
+
+    fig.update_xaxes(
+        title_text="Search distance (m)",
+        showgrid=True,
+        gridcolor=CORPORATE_GRID,
+        zeroline=False,
+    )
+    fig.update_yaxes(
+        title_text="Pairs",
+        rangemode="tozero",
+        showgrid=True,
+        gridcolor=CORPORATE_GRID,
+        zeroline=False,
+        secondary_y=False,
+    )
+    fig.update_yaxes(
+        title_text="Pairing rate (%)",
+        range=[0.0, 100.0],
+        ticksuffix="%",
+        showgrid=False,
+        zeroline=False,
+        secondary_y=True,
+    )
+
+    fig.update_layout(
+        title={
+            "text": (
+                "Pairing Sensitivity — Search Distance"
+                f"<br><sup>{search_geometry} · {pairing_mode}</sup>"
+            ),
+            "x": 0.01,
+            "xanchor": "left",
+            "font": {"size": 18, "color": "#004967"},
+        },
+        template="plotly_white",
+        height=420,
+        margin={"l": 65, "r": 65, "t": 80, "b": 60},
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#26323A"},
+        legend={
+            "orientation": "h",
+            "x": 1.0,
+            "xanchor": "right",
+            "y": 1.02,
+            "yanchor": "bottom",
+            "bgcolor": "rgba(255,255,255,0.80)",
+            "font": {"size": 13},
+        },
+        hovermode="x unified",
+    )
+    return fig
+

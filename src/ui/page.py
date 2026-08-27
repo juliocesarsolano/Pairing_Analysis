@@ -32,6 +32,7 @@ from src.core.plotting import (
     PlotOptions,
     build_multiplot,
     build_pair_location_plot,
+    build_pairing_sensitivity_plot,
 )
 from src.core.statistics import (
     compute_pair_metrics,
@@ -48,6 +49,9 @@ from src.ui.theme import (
     render_kpi_cards,
     sidebar_banner,
 )
+
+
+SENSITIVITY_RANGES_M = (1.0, 2.0, 3.0, 4.0, 5.0)
 
 
 CANONICAL_VARIABLES = {
@@ -80,6 +84,56 @@ def cached_pairing(
 ) -> PairingResult:
     """Cache the expensive KD-tree search."""
     return pair_records_kdtree(ref_coords, cmp_coords, dismax, keep_closest)
+
+
+@st.cache_data(show_spinner=False)
+def cached_pairing_sensitivity(
+    ref_coords: np.ndarray,
+    cmp_coords: np.ndarray,
+    ref_variable_values: np.ndarray,
+    cmp_variable_values: np.ndarray,
+    search_distances: tuple[float, ...],
+    keep_closest: bool,
+) -> pd.DataFrame:
+    """Evaluate analysis-valid pairing response across search distances."""
+    rows: list[dict[str, float | int]] = []
+    n_reference = int(ref_coords.shape[0])
+
+    for radius in search_distances:
+        result = pair_records_kdtree(
+            ref_coords, cmp_coords, float(radius), keep_closest
+        )
+        if result.n_pairs:
+            ref_values = ref_variable_values[result.reference_indices]
+            cmp_values = cmp_variable_values[result.comparison_indices]
+            valid = np.isfinite(ref_values) & np.isfinite(cmp_values)
+            ref_indices = result.reference_indices[valid]
+            distances = result.distances[valid]
+        else:
+            ref_indices = np.empty(0, dtype=np.int64)
+            distances = np.empty(0, dtype=np.float64)
+
+        n_pairs = int(distances.size)
+        n_paired_reference = int(np.unique(ref_indices).size) if n_pairs else 0
+        pairing_rate = (
+            100.0 * n_paired_reference / n_reference if n_reference else 0.0
+        )
+        rows.append(
+            {
+                "search_distance_m": float(radius),
+                "pairs": n_pairs,
+                "paired_reference": n_paired_reference,
+                "pairing_rate_pct": pairing_rate,
+                "mean_separation_m": (
+                    float(np.mean(distances)) if n_pairs else np.nan
+                ),
+                "max_separation_m": (
+                    float(np.max(distances)) if n_pairs else np.nan
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(show_spinner=False)
@@ -161,7 +215,7 @@ def render_app() -> None:
     render_header(
         [
             ("Engine", "GETPAIRS v2.000"),
-            ("Search", "3D / 2D spherical"),
+            ("Search", "3D spherical · nearest default"),
             ("Platform", "Python · Streamlit"),
         ]
     )
@@ -199,6 +253,115 @@ def render_app() -> None:
         st.error(str(exc))
         return
 
+    # Primary categorical filter: always visible in the main banner area.
+    categorical_cfg: dict[str, Any] | None = None
+    categorical_a = _categorical_candidates(table_a.frame, set())
+    categorical_b = _categorical_candidates(table_b.frame, set())
+    no_filter_label = "<No filter>"
+
+    st.markdown(
+        """
+        <div style="margin:0.15rem 0 0.45rem 0;padding:0.72rem 0.95rem;
+                    border-left:4px solid #A39161;border-radius:8px;
+                    background:linear-gradient(90deg,rgba(3,84,124,0.10),rgba(255,255,255,0.88));
+                    border-top:1px solid rgba(3,84,124,0.10);
+                    border-right:1px solid rgba(3,84,124,0.10);
+                    border-bottom:1px solid rgba(3,84,124,0.10);">
+            <div style="font-size:0.68rem;font-weight:800;letter-spacing:0.10em;
+                        color:#6C7881;text-transform:uppercase;">Primary Filter</div>
+            <div style="font-size:1.02rem;font-weight:800;color:#004967;">
+                Categorical Variable Filter
+            </div>
+            <div style="font-size:0.84rem;color:#52636D;margin-top:0.15rem;">
+                Default = no categorical restriction. Select equivalent fields and categories only when needed.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(border=True):
+        field_col_a, field_col_b = st.columns(2)
+        options_a = [no_filter_label, *categorical_a]
+        category_a = field_col_a.selectbox(
+            "Dataset A categorical field",
+            options_a,
+            index=0,
+            key="primary_categorical_a",
+            help=(
+                "Choose a categorical or low-cardinality coded field such as lithology, domain, "
+                "alteration, weathering, phase, sample type, or year. Leave <No filter> for all data."
+            ),
+        )
+
+        options_b = [no_filter_label, *categorical_b]
+        matched_b = (
+            _matching_column(category_a, categorical_b)
+            if category_a != no_filter_label
+            else None
+        )
+        previous_category_a = st.session_state.get("_primary_categorical_a_previous")
+        if previous_category_a != category_a:
+            st.session_state["primary_categorical_b"] = matched_b or no_filter_label
+            st.session_state["_primary_categorical_a_previous"] = category_a
+        default_b_index = options_b.index(matched_b) if matched_b in options_b else 0
+        category_b = field_col_b.selectbox(
+            "Dataset B categorical field",
+            options_b,
+            index=default_b_index,
+            key="primary_categorical_b",
+            help=(
+                "Choose the equivalent categorical field in Dataset B. If the field names match, "
+                "the corresponding field is selected automatically on first use."
+            ),
+        )
+
+        if category_a != no_filter_label and category_b != no_filter_label:
+            values_a = _domain_values(table_a.frame[category_a])
+            values_b = _domain_values(table_b.frame[category_b])
+            value_col_a, value_col_b = st.columns(2)
+            keep_a = value_col_a.multiselect(
+                "Dataset A categories",
+                values_a,
+                default=values_a,
+                key="primary_categorical_values_a",
+            )
+            keep_b = value_col_b.multiselect(
+                "Dataset B categories",
+                values_b,
+                default=values_b,
+                key="primary_categorical_values_b",
+            )
+
+            if not keep_a or not keep_b:
+                st.warning(
+                    "Select at least one category in both datasets. No categorical filter is applied "
+                    "until both selections are valid."
+                )
+            elif keep_a != values_a or keep_b != values_b:
+                categorical_cfg = {
+                    "a_col": category_a,
+                    "b_col": category_b,
+                    "a_values": keep_a,
+                    "b_values": keep_b,
+                }
+                st.caption(
+                    "Active categorical filter · "
+                    f"A[{category_a}] = {_format_filter_values(keep_a)} · "
+                    f"B[{category_b}] = {_format_filter_values(keep_b)}"
+                )
+            else:
+                st.caption(
+                    "All categories are selected in both datasets — no categorical restriction is applied."
+                )
+        elif category_a != no_filter_label or category_b != no_filter_label:
+            st.caption(
+                "Select a categorical field in both datasets to activate the filter. "
+                "Until then, all records remain eligible."
+            )
+        else:
+            st.caption("No categorical filter applied.")
+
     with st.sidebar:
         sidebar_banner("Role", "Reference direction")
         reference_choice = st.radio(
@@ -217,15 +380,6 @@ def render_app() -> None:
         )
         map_b = _coordinate_mapping(
             "B", table_b, indices_for_uploaded_file(par_params, upload_b.name)
-        )
-
-        default_2d = False
-        if par_params is not None:
-            default_2d = par_params.first_xyz[2] == 0 or par_params.second_xyz[2] == 0
-        ignore_z = st.checkbox(
-            "2D search (ignore Z)",
-            value=default_2d,
-            help="When enabled, Z is forced to zero in both datasets and distance is calculated in XY only.",
         )
 
         sidebar_banner("Variable", "Analysis variable")
@@ -260,26 +414,57 @@ def render_app() -> None:
             format="%.3f",
             help="Pairs are retained only when distance < maximum distance; the boundary is excluded.",
         )
-        default_mode = 1 if par_params is not None and par_params.ikeepclose == 1 else 0
+        if par_params is None:
+            default_mode = 1
+        else:
+            default_mode = 1 if par_params.ikeepclose == 1 else 0
         mode = st.radio(
             "Pairing rule",
             ["All neighbors within radius", "Nearest neighbor only"],
             index=default_mode,
             help=(
-                "All neighbors corresponds to GETPAIRS ikeepclose=0. Nearest neighbor corresponds "
-                "to ikeepclose=1."
+                "Nearest neighbor is the default analysis mode and corresponds to one comparison "
+                "sample per reference sample (GETPAIRS ikeepclose=1). All neighbors preserves "
+                "the legacy ikeepclose=0 behavior."
             ),
         )
         keep_closest = mode == "Nearest neighbor only"
         pairing_mode_note(keep_closest)
 
+        default_2d = False
+        if par_params is not None:
+            default_2d = (
+                par_params.first_xyz[2] == 0 or par_params.second_xyz[2] == 0
+            )
+        with st.expander("Advanced search options", expanded=default_2d):
+            geometry = st.radio(
+                "Search geometry",
+                ["3D spherical (XYZ)", "Plan-view (XY, ignore Z)"],
+                index=1 if default_2d else 0,
+                help=(
+                    "3D spherical search uses X, Y and Z. Plan-view search removes vertical "
+                    "separation from the distance calculation and can therefore produce many more pairs."
+                ),
+            )
+            ignore_z = geometry == "Plan-view (XY, ignore Z)"
+            if ignore_z:
+                st.caption(
+                    "Plan-view search sets Z to zero for both datasets. Samples that are close in XY "
+                    "can pair even when they are far apart vertically."
+                )
+            else:
+                st.caption(
+                    "3D spherical search is the recommended default when valid X, Y and Z coordinates "
+                    "are available in both datasets."
+                )
+
         sidebar_banner("Filters", "Eligibility")
         valid_assays_only = st.checkbox(
-            "Valid assay only",
+            "Positive assays only (> 0)",
             value=True,
             help=(
-                "Recommended for variable-specific paired analysis. Records with invalid values for the selected "
-                "variable are removed before spatial pairing."
+                "Default mining-grade validity rule. Only finite values greater than zero are eligible "
+                "for pairing, so negative sentinel values such as -99 and zero values are excluded."
             ),
         )
         use_trim = st.checkbox("Apply grade-range filter before pairing", value=False)
@@ -293,8 +478,12 @@ def render_app() -> None:
                 ignore_index=True,
             )
             finite = combined[np.isfinite(combined)]
+            if valid_assays_only:
+                finite = finite[finite > 0.0]
             if finite.empty:
-                st.error("Selected variables contain no finite values for grade filtering.")
+                st.error(
+                    "Selected variables contain no eligible positive finite values for grade filtering."
+                )
                 return
             col1, col2 = st.columns(2)
             lower = col1.number_input("Min", value=float(finite.min()), format="%.6g")
@@ -303,62 +492,6 @@ def render_app() -> None:
                 st.error("Minimum grade cannot exceed maximum grade.")
                 return
             trim_bounds = (float(lower), float(upper))
-
-        use_category_filter = st.checkbox(
-            "Categorical Variable Filter",
-            value=False,
-            help=(
-                "Optionally restrict the analysis to selected categories such as lithology, "
-                "estimation domain, alteration, weathering, sample type, phase, or year. "
-                "Choose the corresponding field independently in each dataset."
-            ),
-        )
-        categorical_cfg: dict[str, Any] | None = None
-        if use_category_filter:
-            excluded_a = {variable_a, *(value for value in map_a.values() if value is not None)}
-            excluded_b = {variable_b, *(value for value in map_b.values() if value is not None)}
-            categorical_a = _categorical_candidates(table_a.frame, excluded_a)
-            categorical_b = _categorical_candidates(table_b.frame, excluded_b)
-            if not categorical_a or not categorical_b:
-                st.warning(
-                    "No suitable categorical fields were detected in one or both datasets. "
-                    "Categorical fields may be text/category columns or low-cardinality coded fields."
-                )
-            else:
-                category_a = st.selectbox(
-                    "Dataset A categorical field",
-                    categorical_a,
-                    key="categorical_a",
-                    help="Select the categorical field used to restrict Dataset A.",
-                )
-                matched_b = _matching_column(category_a, categorical_b)
-                category_b = st.selectbox(
-                    "Dataset B categorical field",
-                    categorical_b,
-                    index=categorical_b.index(matched_b) if matched_b in categorical_b else 0,
-                    key="categorical_b",
-                    help="Select the equivalent categorical field in Dataset B.",
-                )
-                values_a = _domain_values(table_a.frame[category_a])
-                values_b = _domain_values(table_b.frame[category_b])
-                keep_a = st.multiselect(
-                    "Dataset A categories",
-                    values_a,
-                    default=values_a,
-                    key="categorical_values_a",
-                )
-                keep_b = st.multiselect(
-                    "Dataset B categories",
-                    values_b,
-                    default=values_b,
-                    key="categorical_values_b",
-                )
-                categorical_cfg = {
-                    "a_col": category_a,
-                    "b_col": category_b,
-                    "a_values": keep_a,
-                    "b_values": keep_b,
-                }
 
         sidebar_banner("Labels", "Series names")
         series_name_help = (
@@ -504,7 +637,7 @@ def render_app() -> None:
     )
 
     figure_title = f"Paired-Sample Comparison — {variable_label}"
-    search_axes_label = "XY" if ignore_z else "XYZ"
+    search_axes_label = _search_geometry_label(active_axes, ignore_z)
     figure_subtitle = (
         f"{comparison_label} vs {reference_label} · n = {ref_values.size:,} · "
         f"{search_axes_label} distance < {float(dismax):.2f} m · {mode}"
@@ -516,6 +649,29 @@ def render_app() -> None:
         search_axes_label=search_axes_label,
         dismax=float(dismax),
         pairing_mode=mode,
+    )
+
+    sensitivity_distances = _sensitivity_distances(float(dismax))
+    sensitivity_ref_values = pd.to_numeric(
+        reference[ref_var], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    sensitivity_cmp_values = pd.to_numeric(
+        comparison[cmp_var], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    sensitivity_frame = cached_pairing_sensitivity(
+        ref_coords,
+        cmp_coords,
+        sensitivity_ref_values,
+        sensitivity_cmp_values,
+        sensitivity_distances,
+        keep_closest,
+    )
+    sensitivity_fig = build_pairing_sensitivity_plot(
+        sensitivity_frame,
+        selected_distance=float(dismax),
+        pairing_mode=mode,
+        search_geometry=search_axes_label,
+        colors=palette.series,
     )
 
     fig = cached_multiplot(
@@ -610,6 +766,42 @@ def render_app() -> None:
     with tabs[1]:
         st.markdown("### Pairing Report")
         _render_pairing_report(result, len(reference), len(comparison), active_axes)
+
+        st.markdown("### Pairing Sensitivity")
+        st.caption(
+            "Search-distance sensitivity using the same filtered datasets, search geometry and pairing rule. "
+            "The standard diagnostic evaluates 1–5 m; the currently selected distance is also included when needed."
+        )
+        st.plotly_chart(
+            sensitivity_fig,
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+        with st.expander("Sensitivity table", expanded=False):
+            sensitivity_display = sensitivity_frame.rename(
+                columns={
+                    "search_distance_m": "Search distance (m)",
+                    "pairs": "Pairs",
+                    "paired_reference": "Paired reference",
+                    "pairing_rate_pct": "Pairing rate (%)",
+                    "mean_separation_m": "Mean separation (m)",
+                    "max_separation_m": "Max separation (m)",
+                }
+            )
+            st.dataframe(
+                sensitivity_display.style.format(
+                    {
+                        "Search distance (m)": "{:.2f}",
+                        "Pairing rate (%)": "{:.2f}",
+                        "Mean separation (m)": "{:.2f}",
+                        "Max separation (m)": "{:.2f}",
+                    },
+                    na_rep="n/a",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
         if analysis_mask.sum() != result.n_pairs:
             st.caption(
                 f"Analysis-valid pairs: {int(analysis_mask.sum()):,} of {result.n_pairs:,} spatial pairs. "
@@ -672,6 +864,13 @@ def render_app() -> None:
             use_container_width=True,
         )
 
+        st.download_button(
+            "Pairing Sensitivity CSV",
+            data=sensitivity_frame.to_csv(index=False).encode("utf-8"),
+            file_name=f"pairing_sensitivity_{variable_label}.csv",
+            mime="text/csv",
+        )
+
         if spatial_fig is not None:
             spatial_col1, spatial_col2 = st.columns(2)
             spatial_col1.download_button(
@@ -700,7 +899,7 @@ def render_app() -> None:
                 )
 
         try:
-            png = fig.to_image(format="png", width=1400, height=1400, scale=2)
+            png = fig.to_image(format="png", width=1500, height=1250, scale=2)
             st.download_button(
                 "Presentation-ready PNG",
                 data=png,
@@ -904,7 +1103,7 @@ def _analysis_filter_note(
     parts = [
         f"Search: {search_axes_label} distance < {dismax:.2f} m",
         f"Pairing: {pairing_mode}",
-        "Valid assays only" if valid_assays_only else "Invalid assays not pre-filtered",
+        "Positive assays only (> 0)" if valid_assays_only else "Non-positive assays allowed",
     ]
     if trim_bounds is not None:
         parts.append(f"Grade range: {trim_bounds[0]:.4g} to {trim_bounds[1]:.4g}")
@@ -919,6 +1118,31 @@ def _analysis_filter_note(
     else:
         parts.append("Categorical filter: not applied")
     return "Filters — " + " · ".join(parts)
+
+
+def _sensitivity_distances(selected_distance: float) -> tuple[float, ...]:
+    """Return standard 1–5 m sensitivity ranges plus the active search distance."""
+    values = set(SENSITIVITY_RANGES_M)
+    if np.isfinite(selected_distance) and selected_distance > 0.0:
+        values.add(float(selected_distance))
+    return tuple(sorted(values))
+
+
+def _search_geometry_label(
+    active_axes: tuple[bool, bool, bool],
+    ignore_z: bool,
+) -> str:
+    """Return a concise description of the actual search geometry."""
+    if active_axes == (True, True, True) and not ignore_z:
+        return "3D XYZ spherical"
+    if active_axes[0] and active_axes[1] and not active_axes[2]:
+        return "Plan-view XY (Z ignored)"
+    axes = ",".join(
+        axis
+        for axis, active in zip(("X", "Y", "Z"), active_axes, strict=True)
+        if active
+    )
+    return f"Active axes: {axes or 'none'}"
 
 
 def _paired_display_coordinates(
@@ -984,7 +1208,7 @@ def _apply_eligibility_filters(
     mask = pd.Series(True, index=frame.index)
     numeric_variable = pd.to_numeric(frame[variable], errors="coerce")
     if valid_only:
-        mask &= np.isfinite(numeric_variable)
+        mask &= np.isfinite(numeric_variable) & (numeric_variable > 0.0)
     if trim_bounds is not None:
         lower, upper = trim_bounds
         mask &= np.isfinite(numeric_variable) & numeric_variable.between(
