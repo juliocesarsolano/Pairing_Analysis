@@ -2,7 +2,7 @@
 
 A production-oriented Python/Streamlit application for spatial paired-sample analysis, based on the FORTRAN **GETPAIRS** program.
 
-The application combines legacy-compatible spatial pairing with modern statistical comparison, interactive spatial QA/QC, categorical filtering, and export-ready reporting.
+The application combines legacy-compatible spatial pairing with modern statistical comparison, interactive spatial QA/QC, categorical filtering, pairing-sensitivity diagnostics, and export-ready reporting.
 
 ## Main capabilities
 
@@ -12,16 +12,20 @@ The application combines legacy-compatible spatial pairing with modern statistic
   - **Comparison** dataset is searched and plotted on **X**.
 - Uses a spherical search radius with the strict legacy predicate `distance_squared < dismax^2`.
 - Supports **All neighbors within radius** (`ikeepclose=0`) and **Nearest neighbor only** (`ikeepclose=1`).
+- Uses **3D XYZ spherical + Nearest neighbor only** as the normal default workflow when no imported `getpairs.par` overrides those settings.
 - Allows comparison records to be reused by multiple reference records; no global 1:1 assignment is imposed.
-- Supports full 3D search or **2D search (ignore Z)**.
+- Supports an advanced **Plan-view search (XY, ignore Z)** option.
 - Provides explicit variable mapping for both datasets.
-- Supports optional valid-assay, grade-range, and **categorical variable** filtering.
+- Applies **Positive assays only (> 0)** by default for the selected analytical variable.
+- Supports optional grade-range filtering.
+- Provides a visible **Categorical Variable Filter** as a primary filter, with `<No filter>` as the default.
 - Displays the exact analysis-valid paired samples used in the calculations.
 - Provides an interactive spatial pair-location figure with **XY Plan View** by default and optional **XZ** and **YZ** section views.
 - Adds map-style elements to the XY view: north arrow, automatic scale bar, coordinate grid, pair connectors, legend, and equal spatial aspect ratio.
 - Produces a report-grade paired-sample comparison figure containing KDE density scatter, empirical CDFs, Q-Q plot, and comparative statistics.
-- Automatically adds a descriptive figure title and a footer summarizing the active analysis filters.
-- Exports paired CSV, legacy-style GSLIB, statistics CSV, Plotly HTML, PNG, and `getpairs.par`.
+- Automatically adds a descriptive figure title and a footer summarizing the active analytical conditions and filters.
+- Includes **Pairing Sensitivity** diagnostics for testing multiple search radii without changing the main selected pairing result.
+- Exports paired CSV, legacy-style GSLIB, statistics CSV, spatial-figure outputs, comparison-figure outputs, sensitivity results, and `getpairs.par`.
 
 ## Installation
 
@@ -66,23 +70,50 @@ streamlit run app.py
 1. Upload **Dataset A** and **Dataset B**.
 2. Select which dataset is the **Reference** dataset.
 3. Map the sample/hole ID and X, Y, Z coordinates for each dataset.
-4. Enable **2D search (ignore Z)** if the analysis should be performed in plan only.
-5. Select the analysis variable and map the corresponding column in both datasets.
+4. Select the analysis variable and map the corresponding column in both datasets.
+5. Review the **Categorical Variable Filter**. Leave it at `<No filter>` for the full dataset or select equivalent category fields/values in both datasets.
 6. Define the maximum search distance.
-7. Select the pairing rule: **All neighbors within radius** or **Nearest neighbor only**.
-8. Configure optional eligibility filters: valid assays, grade range, and categorical variable.
-9. Enter short series names for the plots and statistics table, for example `Historical RC`, `Recent RC`, `Campaign A`, or `Campaign B`.
-10. Review the **Spatial Pair Locations** figure.
-11. Review the paired-sample comparison figure and Pairing Report.
-12. Export the required tables, plots, or legacy parameter file.
+7. Use **Nearest neighbor only** for the standard one-comparison-per-reference workflow, or switch to **All neighbors within radius** when required.
+8. Keep **Positive assays only (> 0)** enabled for normal grade/geochemical variables unless there is a specific reason to include non-positive values.
+9. Configure an optional grade-range filter if required.
+10. Use **Plan-view search (XY, ignore Z)** only when the analysis should intentionally ignore vertical separation.
+11. Enter short series names for the plots and statistics table, for example `Historical RC`, `Recent RC`, `Campaign A`, or `Campaign B`.
+12. Review the **Spatial Pair Locations** figure.
+13. Review the paired-sample comparison figure.
+14. Review **Pairing Sensitivity** in the Pairing Report when search-radius robustness needs to be evaluated.
+15. Export the required tables, plots, sensitivity results, or legacy parameter file.
+
+## Default pairing configuration
+
+When no imported `getpairs.par` is controlling the settings, the application starts from:
+
+```text
+Search geometry : 3D XYZ spherical
+Pairing rule    : Nearest neighbor only
+Search distance : 2.0 m
+```
+
+This configuration is conceptually equivalent to a one-comparison-per-reference 3D isotropic search.
+
+An imported `getpairs.par` remains authoritative for the legacy-compatible parameters it defines.
 
 ## Categorical Variable Filter
 
-The application can restrict the analysis to one or more categories before spatial pairing.
+The categorical filter is presented as a **primary analysis filter** so it is visible without first enabling another control.
+
+Its default state is:
+
+```text
+<No filter>
+```
+
+Therefore, it does not restrict the data unless the user explicitly selects a categorical field.
 
 Typical examples include:
 
+- Destination
 - Lithology
+- MetType
 - Domain
 - Alteration
 - Weathering
@@ -93,7 +124,7 @@ Typical examples include:
 
 The categorical field can be mapped independently in Dataset A and Dataset B. This is useful when equivalent fields have different column names in the two input datasets.
 
-Only records belonging to the selected categories remain eligible for pairing.
+Once a field is selected, only records belonging to the selected category values remain eligible for pairing.
 
 ## Spatial Pair Locations
 
@@ -120,7 +151,48 @@ When Z is available, the user can switch to:
 - **XZ Section**
 - **YZ Section**
 
-If the pairing search is set to **2D search (ignore Z)**, Z may still be displayed for spatial context but does not participate in pair acceptance.
+These section views display the original mapped Z values.
+
+## 3D and Plan-view search
+
+### 3D XYZ spherical search
+
+This is the normal search geometry:
+
+```text
+distance^2 = dx^2 + dy^2 + dz^2
+```
+
+A pair must satisfy:
+
+```text
+distance < dismax
+```
+
+in three-dimensional space.
+
+### Plan-view search (XY, ignore Z)
+
+This is an advanced option.
+
+When enabled:
+
+```text
+Zref = 0
+Zcmp = 0
+```
+
+and:
+
+```text
+distance^2 = dx^2 + dy^2
+```
+
+Vertical separation no longer contributes to pair acceptance.
+
+This option can produce **more pairs than the 3D search**, because samples separated vertically may still satisfy the XY radius.
+
+The spatial visualization may continue to display original Z values for geological context, but Z is not used in the pairing decision.
 
 ## Paired-Sample Comparison Figure
 
@@ -139,7 +211,46 @@ The main comparison figure contains four analytical components:
 3. **Q-Q plot** for direct quantile comparison.
 4. **Statistics table** with count, mean, stdev, CV, minimum, P10, P50, P90, maximum, and percentage difference.
 
-The figure title is generated from the selected variable and series names. A footer summarizes the active analytical conditions, including search radius, pairing rule, dimensionality, and active filters.
+The figure title is generated from the selected variable and series names.
+
+A footer summarizes the active analytical conditions, including:
+
+- search geometry
+- search radius
+- pairing rule
+- positive-assay filter
+- grade-range filter
+- categorical filter
+
+## Pairing Sensitivity
+
+The Pairing Report includes a **Pairing Sensitivity** diagnostic.
+
+The purpose is to evaluate how the paired population changes as the search radius changes while preserving the same:
+
+```text
+Reference dataset
+Comparison dataset
+Search geometry
+Pairing rule
+Eligibility filters
+```
+
+The standard sensitivity sequence evaluates search radii from approximately:
+
+```text
+1, 2, 3, 4, 5 m
+```
+
+and also includes the active user-selected radius when it is not already represented.
+
+The diagnostic reports metrics such as:
+
+- number of pairs
+- pairing rate
+- pair-separation behavior
+
+This is a sensitivity analysis only. It does **not** replace or alter the main pairing result selected by the user.
 
 ## Pairing logic
 
@@ -180,27 +291,67 @@ For exact equal-distance ties, the first comparison record encountered is retain
 
 ### Comparison-record reuse
 
-The analysis does not impose a global one-to-one matching constraint. A comparison record may therefore be paired to more than one reference record. The Pairing Report explicitly summarizes comparison-record reuse.
+The analysis does not impose a global one-to-one matching constraint. A comparison record may therefore be paired to more than one reference record.
+
+The Pairing Report explicitly summarizes comparison-record reuse.
 
 ### Coordinate behavior
 
 The legacy implementation only activates a coordinate axis when the corresponding coordinate column is available in both datasets.
 
-The modern interface preserves this behavior while exposing the common workflow explicitly through **2D search (ignore Z)**.
+The modern interface preserves this behavior while exposing the standard **3D XYZ spherical** workflow and the advanced **Plan-view search (XY, ignore Z)** option explicitly.
 
 ## Eligibility filters
 
-### Valid assay only
+Eligibility filters are applied **before** the spatial search.
 
-When enabled, non-finite values for the selected analytical variable are removed before spatial pairing.
+The sequence is:
+
+```text
+Input data
+   -> eligibility filters
+   -> spatial search
+   -> paired dataset
+   -> statistics
+```
+
+### Positive assays only (> 0)
+
+This filter is enabled by default.
+
+For the selected analytical variable, records are retained only when the value is:
+
+```text
+finite AND > 0
+```
+
+This excludes values such as:
+
+```text
+-99
+-999
+0
+NaN
+Inf
+```
+
+before spatial pairing.
+
+This is an application-level preprocessing rule and is not part of the original FORTRAN GETPAIRS distance algorithm.
+
+The user may disable it when a specific variable legitimately contains zero or negative values.
 
 ### Grade-range filter
 
-The user may define a minimum and maximum analytical value. Records outside that range are excluded before pairing.
+The user may define a minimum and maximum analytical value.
+
+Records outside that range are excluded before pairing.
 
 ### Categorical Variable Filter
 
 The user may select a categorical field and one or more permitted category values independently for both datasets.
+
+The default `<No filter>` state leaves all categories eligible.
 
 All active eligibility filters are summarized in the comparison-figure footer.
 
@@ -239,6 +390,7 @@ The application can generate:
 - Spatial Pair Locations PNG
 - Comparison Figure HTML
 - Presentation-ready PNG
+- Pairing Sensitivity CSV
 - `getpairs.par`
 
 ### GSLIB export limitation

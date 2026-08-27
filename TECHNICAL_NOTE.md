@@ -13,6 +13,15 @@ The objective is simple:
 
 The resulting pairs are then used for the statistical comparison.
 
+In the current application workflow, the normal default is:
+
+```text
+3D XYZ spherical search
+Nearest neighbor only
+```
+
+unless an imported `getpairs.par` specifies otherwise.
+
 ---
 
 ## 2. Core pairing logic
@@ -79,7 +88,7 @@ flowchart TD
 
     L -- Yes --> D
     L -- No --> M[Final paired dataset]
-    M --> N[Statistics and plots]
+    M --> N[Statistics, plots and sensitivity diagnostics]
 ```
 
 The reference dataset always drives the search. This means the algorithm is **reference-centered**, not a symmetric nearest-neighbor matching procedure.
@@ -149,6 +158,8 @@ R1 - C1
 
 There is at most one retained comparison sample for each reference sample.
 
+This is the normal default pairing mode in the application when no imported parameter file overrides it.
+
 ---
 
 ## 5. Equal-distance ties
@@ -203,9 +214,11 @@ The search is performed independently for each reference sample, so selecting `C
 
 ---
 
-## 7. 3D and 2D search
+## 7. 3D and Plan-view search
 
-### 3D search
+### 7.1 3D XYZ spherical search
+
+This is the normal search geometry.
 
 When X, Y, and Z are active:
 
@@ -213,11 +226,17 @@ When X, Y, and Z are active:
 dis = dx^2 + dy^2 + dz^2
 ```
 
-This produces a spherical search neighborhood.
+The search neighborhood is spherical when the same maximum distance is applied in all three directions.
 
-### 2D search
+A sample must satisfy the distance threshold in full three-dimensional space.
 
-When Z is ignored:
+---
+
+### 7.2 Plan-view search (XY, ignore Z)
+
+Plan-view search is an advanced option.
+
+When enabled:
 
 ```text
 Zref = 0
@@ -232,23 +251,25 @@ dis = dx^2 + dy^2
 
 The search becomes circular in plan view.
 
-The spatial visualization may still display original Z values for geological context, but Z does not contribute to pair acceptance when the 2D option is active.
+Because vertical separation is ignored:
+
+```text
+distance_2D <= distance_3D
+```
+
+for the same two samples.
+
+Therefore, Plan-view search can produce **more pairs than 3D search**, not fewer.
+
+A pair that fails the 3D radius because of vertical separation can still pass the XY radius.
+
+The spatial visualization may still display original Z values for geological context, but Z does not contribute to pair acceptance when Plan-view search is active.
 
 ---
 
 ## 8. Eligibility filtering before pairing
 
-The application can reduce the eligible records before the spatial search.
-
-Typical filters include:
-
-```text
-Valid assay
-Grade range
-Categorical variable
-```
-
-Examples of categorical variables are lithology, alteration, domain, weathering, drilling campaign, or sample type.
+The application reduces the eligible records before the spatial search.
 
 The sequence is:
 
@@ -260,7 +281,72 @@ Input data
    -> statistics
 ```
 
-Therefore, only samples that pass the active filters are available to become pairs.
+The main eligibility controls are:
+
+```text
+Positive assays only (> 0)
+Grade range
+Categorical variable
+```
+
+### Positive assays only (> 0)
+
+This filter is enabled by default for the selected analytical variable.
+
+A record is eligible only when the selected variable is:
+
+```text
+finite AND > 0
+```
+
+This removes values such as:
+
+```text
+-99
+-999
+0
+NaN
+Inf
+```
+
+before pairing.
+
+This is an application-level preprocessing rule. It is **not** part of the original FORTRAN GETPAIRS distance algorithm.
+
+The user may disable it when a variable legitimately contains zero or negative values.
+
+### Grade-range filter
+
+An optional minimum and maximum value can be applied before pairing.
+
+### Categorical Variable Filter
+
+The categorical filter is presented as a primary filter.
+
+Its default state is:
+
+```text
+<No filter>
+```
+
+so no categorical restriction is applied until the user explicitly selects a field and category values.
+
+Typical categorical fields include:
+
+```text
+Destination
+MetType
+Lithology
+Alteration
+Domain
+Weathering
+Sample type
+Year
+```
+
+The corresponding categorical field can be selected independently in the two input datasets.
+
+Only samples that pass all active eligibility filters are available to become pairs.
 
 ---
 
@@ -292,7 +378,45 @@ This preserves the important behavior of the original algorithm while providing 
 
 ---
 
-## 10. Final paired dataset
+## 10. Pairing Sensitivity
+
+The application includes a **Pairing Sensitivity** diagnostic to evaluate the robustness of the paired population to the selected search radius.
+
+The main pairing result is calculated using the active user-selected radius.
+
+The sensitivity diagnostic then repeats the same pairing logic for a sequence of alternative radii while preserving:
+
+```text
+Reference dataset
+Comparison dataset
+Search geometry
+Pairing mode
+Eligibility filters
+```
+
+A standard sequence is approximately:
+
+```text
+1, 2, 3, 4, 5 m
+```
+
+with the active selected radius also included when necessary.
+
+The diagnostic can summarize:
+
+```text
+Number of pairs
+Pairing rate
+Pair-separation behavior
+```
+
+This procedure is analogous to testing the search-radius sensitivity of the pairing configuration.
+
+It does **not** alter the main paired dataset and it does not introduce a different matching algorithm.
+
+---
+
+## 11. Final paired dataset
 
 Each accepted pair contains:
 
@@ -316,11 +440,13 @@ These exact paired records are the population used by the subsequent statistical
 
 ---
 
-## 11. Algorithm summary
+## 12. Algorithm summary
 
 The complete logic can be summarized as:
 
 ```text
+Apply active eligibility filters.
+
 FOR each Reference sample:
 
     identify nearby Comparison candidates
@@ -341,15 +467,23 @@ FOR each Reference sample:
 Comparison records remain reusable.
 
 Return the final paired dataset.
+
+Optionally repeat the same logic at alternative search radii
+for Pairing Sensitivity diagnostics.
 ```
 
 The key characteristics are therefore:
 
 - reference-driven search;
 - strict distance threshold;
+- normal default of 3D XYZ spherical search;
 - all-neighbor or nearest-neighbor mode;
+- nearest-neighbor mode as the normal application default;
 - first-occurrence tie handling;
 - comparison-record reuse;
-- optional 2D or 3D search;
+- advanced Plan-view search that ignores Z;
+- positive-assay preprocessing enabled by default;
+- visible categorical filtering with `<No filter>` as the default;
 - eligibility filtering before pairing;
-- KD-tree acceleration without changing the pairing rule.
+- KD-tree acceleration without changing the pairing rule;
+- search-radius sensitivity diagnostics that do not alter the main pairing result.
