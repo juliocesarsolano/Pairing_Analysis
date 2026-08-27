@@ -55,17 +55,121 @@ SENSITIVITY_RANGES_M = (1.0, 2.0, 3.0, 4.0, 5.0)
 
 
 CANONICAL_VARIABLES = {
-    "au_ppm": ["au_ppm", "au", "gold", "au_gpt", "au_gt"],
-    "ag_ppm": ["ag_ppm", "ag", "silver", "ag_gpt", "ag_gt"],
-    "s_tot_pct": ["s_tot_pct", "stot", "s_tot", "total_sulfur", "sulfur_total"],
-    "s2_pct": ["s2_pct", "s2", "sulfide_sulfur", "sulfide_s"],
-    "c_tot_pct": ["c_tot_pct", "ctot", "c_tot", "total_carbon"],
-    "c_org_pct": ["c_org_pct", "corg", "c_org", "organic_carbon"],
-    "cu_pct": ["cu_pct", "cu", "copper"],
-    "zn_pct": ["zn_pct", "zn", "zinc"],
-    "cao_pct": ["cao_pct", "cao"],
-    "sio2_pct": ["sio2_pct", "sio2"],
+    "au_ppm": [
+        "au_ppm",
+        "au_ppm_d",
+        "au",
+        "gold",
+        "au_gpt",
+        "au_gt",
+    ],
+    "ag_ppm": [
+        "ag_ppm",
+        "ag_ppm_d",
+        "ag",
+        "silver",
+        "ag_gpt",
+        "ag_gt",
+    ],
+    "s_tot_pct": [
+        "s_tot_pct",
+        "stot_pct",
+        "stot_pct_d",
+        "s_tot_pct_d",
+        "stot",
+        "s_tot",
+        "total_sulfur",
+        "sulfur_total",
+    ],
+    "s2_pct": [
+        "s2_pct",
+        "s2_pct_d",
+        "s2",
+        "sulfide_sulfur",
+        "sulfide_s",
+    ],
+    "c_tot_pct": [
+        "c_tot_pct",
+        "ctot_pct",
+        "ctot_pct_d",
+        "c_tot_pct_d",
+        "ctot",
+        "c_tot",
+        "total_carbon",
+    ],
+    "c_org_pct": [
+        "c_org_pct",
+        "corg_pct",
+        "oc_pct",
+        "oc_pct_d",
+        "corg",
+        "c_org",
+        "organic_carbon",
+    ],
+    "cu_pct": [
+        "cu_pct",
+        "cu_pct_d",
+        "cu",
+        "copper",
+    ],
+    "zn_pct": [
+        "zn_pct",
+        "zn_pct_d",
+        "zn",
+        "zinc",
+    ],
+    "cao_pct": [
+        "cao_pct",
+        "cao_pct_d",
+        "cao",
+    ],
+    "sio2_pct": [
+        "sio2_pct",
+        "sio2_pct_d",
+        "sio2",
+    ],
     "Custom": [],
+}
+
+
+# Preferred fields are promoted to the top of the Primary Categorical Filter.
+# Remaining valid categorical fields are still available below them.
+PREFERRED_CATEGORICAL_VARIABLES = (
+    "Destination",
+    "metype_txt",
+    "Mettype",
+    "LithType",
+    "ModelCode",
+    "PI_ModelCode",
+    "PI_MinAssemblage",
+    "SAMPLETYPE",
+    "PROJECTCODE",
+    "YEAR",
+    "STARTDATE",
+)
+
+
+# Fields that should not be proposed as categorical filters merely because
+# they happen to have low cardinality in a small dataset.
+NON_CATEGORICAL_FIELDS = {
+    "holeid",
+    "hole_id",
+    "sampleid",
+    "sample_id",
+    "sampleid_2",
+    "from",
+    "to",
+    "mid_x",
+    "mid_y",
+    "mid_z",
+    "x",
+    "y",
+    "z",
+    "easting",
+    "northing",
+    "elevation",
+    "elev",
+    "rl",
 }
 
 
@@ -1045,17 +1149,37 @@ def _categorical_candidates(
     excluded: set[str],
     max_unique: int = 60,
 ) -> list[str]:
-    """Return text/category and low-cardinality coded fields suitable for filtering."""
+    """Return ranked categorical fields suitable for the Primary Filter.
+
+    Text/category/bool fields and low-cardinality numeric codes are eligible.
+    Known IDs, coordinates, interval limits and analytical variables are
+    excluded so that small datasets do not accidentally promote continuous
+    measurements such as ``from``, ``to`` or assay columns.
+    """
     candidates: list[str] = []
     n_rows = max(len(frame), 1)
+
+    excluded_normalized = {_normalize(name) for name in excluded}
+    excluded_normalized.update(_normalize(name) for name in NON_CATEGORICAL_FIELDS)
+
+    # All canonical analytical names and aliases are measurements, not
+    # categorical domains, even when a particular file contains few values.
+    for canonical, aliases in CANONICAL_VARIABLES.items():
+        if canonical == "Custom":
+            continue
+        excluded_normalized.add(_normalize(canonical))
+        excluded_normalized.update(_normalize(alias) for alias in aliases)
+
     for column in frame.columns:
         name = str(column)
-        if name in excluded:
+        if _normalize(name) in excluded_normalized:
             continue
+
         series = frame[column]
         unique_count = int(series.nunique(dropna=True))
         if unique_count == 0 or unique_count > max_unique:
             continue
+
         is_text_like = (
             isinstance(series.dtype, pd.CategoricalDtype)
             or pd.api.types.is_object_dtype(series)
@@ -1068,6 +1192,21 @@ def _categorical_candidates(
         )
         if is_text_like or is_low_cardinality_code:
             candidates.append(name)
+
+    # Promote mining-domain fields such as Destination, MetType and LithType
+    # while preserving source-column order for any remaining candidates.
+    preferred_rank = {
+        _normalize(name): rank
+        for rank, name in enumerate(PREFERRED_CATEGORICAL_VARIABLES)
+    }
+    original_rank = {name: rank for rank, name in enumerate(candidates)}
+    candidates.sort(
+        key=lambda name: (
+            0 if _normalize(name) in preferred_rank else 1,
+            preferred_rank.get(_normalize(name), original_rank[name]),
+            original_rank[name],
+        )
+    )
     return candidates
 
 
