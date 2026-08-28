@@ -363,8 +363,9 @@ def render_app() -> None:
         st.error(str(exc))
         return
 
-    # Primary categorical filter: always visible in the main banner area.
-    categorical_cfg: dict[str, Any] | None = None
+    # Nested categorical filters: always visible in the main banner area.
+    # Layer 2 is evaluated on the subset produced by Layer 1.
+    categorical_filters_cfg: list[dict[str, Any]] = []
     categorical_a = _categorical_candidates(table_a.frame, set())
     categorical_b = _categorical_candidates(table_b.frame, set())
     no_filter_label = "<No filter>"
@@ -378,12 +379,13 @@ def render_app() -> None:
                     border-right:1px solid rgba(3,84,124,0.10);
                     border-bottom:1px solid rgba(3,84,124,0.10);">
             <div style="font-size:0.68rem;font-weight:800;letter-spacing:0.10em;
-                        color:#6C7881;text-transform:uppercase;">Primary Filter</div>
+                        color:#6C7881;text-transform:uppercase;">Primary Filters</div>
             <div style="font-size:1.02rem;font-weight:800;color:#004967;">
-                Categorical Variable Filter
+                Nested Categorical Filters
             </div>
             <div style="font-size:0.84rem;color:#52636D;margin-top:0.15rem;">
-                Default = no categorical restriction. Select equivalent fields and categories only when needed.
+                Layer 2 is evaluated inside the subset selected by Layer 1. Multiple values within
+                a layer use OR logic; active layers are combined with AND logic.
             </div>
         </div>
         """,
@@ -391,16 +393,17 @@ def render_app() -> None:
     )
 
     with st.container(border=True):
+        st.markdown("#### Filter Layer 1")
+
         field_col_a, field_col_b = st.columns(2)
         options_a = [no_filter_label, *categorical_a]
         category_a = field_col_a.selectbox(
-            "Dataset A categorical field",
+            "Dataset A field · Layer 1",
             options_a,
             index=0,
-            key="primary_categorical_a",
+            key="categorical_l1_a",
             help=(
-                "Choose a categorical or low-cardinality coded field such as lithology, domain, "
-                "alteration, weathering, phase, sample type, or year. Leave <No filter> for all data."
+                "Choose the first categorical/domain field. Leave <No filter> to analyze all data."
             ),
         )
 
@@ -410,67 +413,223 @@ def render_app() -> None:
             if category_a != no_filter_label
             else None
         )
-        previous_category_a = st.session_state.get("_primary_categorical_a_previous")
+        previous_category_a = st.session_state.get("_categorical_l1_a_previous")
         if previous_category_a != category_a:
-            st.session_state["primary_categorical_b"] = matched_b or no_filter_label
-            st.session_state["_primary_categorical_a_previous"] = category_a
+            st.session_state["categorical_l1_b"] = matched_b or no_filter_label
+            st.session_state["_categorical_l1_a_previous"] = category_a
+            # Layer 2 depends on Layer 1; reset downstream field choices when
+            # the upstream field changes so no stale selection survives.
+            st.session_state.pop("categorical_l2_a", None)
+            st.session_state.pop("categorical_l2_b", None)
+
         default_b_index = options_b.index(matched_b) if matched_b in options_b else 0
         category_b = field_col_b.selectbox(
-            "Dataset B categorical field",
+            "Dataset B field · Layer 1",
             options_b,
             index=default_b_index,
-            key="primary_categorical_b",
+            key="categorical_l1_b",
             help=(
-                "Choose the equivalent categorical field in Dataset B. If the field names match, "
-                "the corresponding field is selected automatically on first use."
+                "Choose the equivalent Layer 1 field in Dataset B. Matching field names "
+                "are selected automatically when available."
             ),
         )
+
+        layer1_ready = False
+        layer1_subset_a = table_a.frame
+        layer1_subset_b = table_b.frame
+        layer1_filter_a: tuple[str, list[Any]] | None = None
+        layer1_filter_b: tuple[str, list[Any]] | None = None
 
         if category_a != no_filter_label and category_b != no_filter_label:
             values_a = _domain_values(table_a.frame[category_a])
             values_b = _domain_values(table_b.frame[category_b])
             value_col_a, value_col_b = st.columns(2)
-            keep_a = value_col_a.multiselect(
-                "Dataset A categories",
+
+            keep_a = _nested_multiselect(
+                value_col_a,
+                "Dataset A categories · Layer 1",
                 values_a,
-                default=values_a,
-                key="primary_categorical_values_a",
+                key=f"categorical_l1_values_a__{_normalize(category_a)}",
             )
-            keep_b = value_col_b.multiselect(
-                "Dataset B categories",
+            keep_b = _nested_multiselect(
+                value_col_b,
+                "Dataset B categories · Layer 1",
                 values_b,
-                default=values_b,
-                key="primary_categorical_values_b",
+                key=f"categorical_l1_values_b__{_normalize(category_b)}",
             )
 
             if not keep_a or not keep_b:
                 st.warning(
-                    "Select at least one category in both datasets. No categorical filter is applied "
-                    "until both selections are valid."
-                )
-            elif keep_a != values_a or keep_b != values_b:
-                categorical_cfg = {
-                    "a_col": category_a,
-                    "b_col": category_b,
-                    "a_values": keep_a,
-                    "b_values": keep_b,
-                }
-                st.caption(
-                    "Active categorical filter · "
-                    f"A[{category_a}] = {_format_filter_values(keep_a)} · "
-                    f"B[{category_b}] = {_format_filter_values(keep_b)}"
+                    "Layer 1 requires at least one category in both datasets. "
+                    "Layer 2 remains unavailable until Layer 1 is valid."
                 )
             else:
-                st.caption(
-                    "All categories are selected in both datasets — no categorical restriction is applied."
+                layer1_ready = True
+                layer1_filter_a = (category_a, keep_a)
+                layer1_filter_b = (category_b, keep_b)
+                layer1_subset_a = _apply_categorical_filters(
+                    table_a.frame, [layer1_filter_a]
                 )
+                layer1_subset_b = _apply_categorical_filters(
+                    table_b.frame, [layer1_filter_b]
+                )
+
+                if keep_a != values_a or keep_b != values_b:
+                    categorical_filters_cfg.append(
+                        {
+                            "layer": 1,
+                            "a_col": category_a,
+                            "b_col": category_b,
+                            "a_values": keep_a,
+                            "b_values": keep_b,
+                        }
+                    )
+                    st.caption(
+                        "Layer 1 active · "
+                        f"A[{category_a}] = {_format_filter_values(keep_a)} · "
+                        f"B[{category_b}] = {_format_filter_values(keep_b)}"
+                    )
+                else:
+                    st.caption(
+                        "Layer 1 configured with all categories selected — no Layer 1 restriction."
+                    )
         elif category_a != no_filter_label or category_b != no_filter_label:
             st.caption(
-                "Select a categorical field in both datasets to activate the filter. "
-                "Until then, all records remain eligible."
+                "Select a Layer 1 field in both datasets to activate nested filtering."
             )
         else:
-            st.caption("No categorical filter applied.")
+            st.caption("Layer 1: no categorical filter applied.")
+
+        st.divider()
+        st.markdown("#### Subfilter Layer 2")
+        st.caption(
+            "Available Layer 2 categories are recalculated from the Layer 1 subset."
+        )
+
+        if layer1_ready:
+            layer2_candidates_a = _categorical_candidates(
+                layer1_subset_a, {category_a}
+            )
+            layer2_candidates_b = _categorical_candidates(
+                layer1_subset_b, {category_b}
+            )
+            layer2_options_a = [no_filter_label, *layer2_candidates_a]
+            layer2_options_b = [no_filter_label, *layer2_candidates_b]
+
+            # If an upstream Layer 1 selection removes a previously selected
+            # Layer 2 field, return that widget to <No filter>.
+            if st.session_state.get("categorical_l2_a") not in layer2_options_a:
+                st.session_state["categorical_l2_a"] = no_filter_label
+            if st.session_state.get("categorical_l2_b") not in layer2_options_b:
+                st.session_state["categorical_l2_b"] = no_filter_label
+
+            layer2_field_col_a, layer2_field_col_b = st.columns(2)
+            category2_a = layer2_field_col_a.selectbox(
+                "Dataset A field · Layer 2",
+                layer2_options_a,
+                index=0,
+                key="categorical_l2_a",
+                help=(
+                    "Choose a second categorical/domain field. Its available categories "
+                    "come only from records that passed Layer 1."
+                ),
+            )
+
+            matched2_b = (
+                _matching_column(category2_a, layer2_candidates_b)
+                if category2_a != no_filter_label
+                else None
+            )
+            previous_category2_a = st.session_state.get("_categorical_l2_a_previous")
+            if previous_category2_a != category2_a:
+                st.session_state["categorical_l2_b"] = matched2_b or no_filter_label
+                st.session_state["_categorical_l2_a_previous"] = category2_a
+
+            default2_b_index = (
+                layer2_options_b.index(matched2_b)
+                if matched2_b in layer2_options_b
+                else 0
+            )
+            category2_b = layer2_field_col_b.selectbox(
+                "Dataset B field · Layer 2",
+                layer2_options_b,
+                index=default2_b_index,
+                key="categorical_l2_b",
+                help=(
+                    "Choose the equivalent Layer 2 field in Dataset B. Matching field names "
+                    "are selected automatically when available."
+                ),
+            )
+
+            if (
+                category2_a != no_filter_label
+                and category2_b != no_filter_label
+            ):
+                values2_a = _domain_values(layer1_subset_a[category2_a])
+                values2_b = _domain_values(layer1_subset_b[category2_b])
+                value2_col_a, value2_col_b = st.columns(2)
+
+                keep2_a = _nested_multiselect(
+                    value2_col_a,
+                    "Dataset A categories · Layer 2",
+                    values2_a,
+                    key=f"categorical_l2_values_a__{_normalize(category2_a)}",
+                )
+                keep2_b = _nested_multiselect(
+                    value2_col_b,
+                    "Dataset B categories · Layer 2",
+                    values2_b,
+                    key=f"categorical_l2_values_b__{_normalize(category2_b)}",
+                )
+
+                if not keep2_a or not keep2_b:
+                    st.warning(
+                        "Layer 2 requires at least one category in both datasets. "
+                        "Only Layer 1 will be used until Layer 2 is valid."
+                    )
+                elif keep2_a != values2_a or keep2_b != values2_b:
+                    categorical_filters_cfg.append(
+                        {
+                            "layer": 2,
+                            "a_col": category2_a,
+                            "b_col": category2_b,
+                            "a_values": keep2_a,
+                            "b_values": keep2_b,
+                        }
+                    )
+                    st.caption(
+                        "Layer 2 active · "
+                        f"A[{category2_a}] = {_format_filter_values(keep2_a)} · "
+                        f"B[{category2_b}] = {_format_filter_values(keep2_b)}"
+                    )
+                else:
+                    st.caption(
+                        "Layer 2 configured with all categories selected — no additional restriction."
+                    )
+            elif (
+                category2_a != no_filter_label
+                or category2_b != no_filter_label
+            ):
+                st.caption(
+                    "Select a Layer 2 field in both datasets to activate the subfilter."
+                )
+            else:
+                st.caption("Layer 2: no subfilter applied.")
+        else:
+            st.info(
+                "Configure a valid Layer 1 filter to enable the nested Layer 2 subfilter."
+            )
+
+        if categorical_filters_cfg:
+            active_path = " → ".join(
+                f"L{cfg['layer']} "
+                f"A[{cfg['a_col']}]={_format_filter_values(cfg['a_values'])}; "
+                f"B[{cfg['b_col']}]={_format_filter_values(cfg['b_values'])}"
+                for cfg in categorical_filters_cfg
+            )
+            st.caption(f"Active nested path · {active_path}")
+        else:
+            st.caption("Active nested path · none")
 
     with st.sidebar:
         sidebar_banner("Role", "Reference direction")
@@ -701,23 +860,25 @@ def render_app() -> None:
     comparison_label = comparison_label.strip() or Path(cmp_upload_name).stem
 
     try:
+        categorical_filters_a = [
+            (cfg["a_col"], cfg["a_values"]) for cfg in categorical_filters_cfg
+        ]
+        categorical_filters_b = [
+            (cfg["b_col"], cfg["b_values"]) for cfg in categorical_filters_cfg
+        ]
         filtered_a = _apply_eligibility_filters(
             table_a.frame,
             variable_a,
             valid_assays_only,
             trim_bounds,
-            None
-            if categorical_cfg is None
-            else (categorical_cfg["a_col"], categorical_cfg["a_values"]),
+            categorical_filters_a,
         )
         filtered_b = _apply_eligibility_filters(
             table_b.frame,
             variable_b,
             valid_assays_only,
             trim_bounds,
-            None
-            if categorical_cfg is None
-            else (categorical_cfg["b_col"], categorical_cfg["b_values"]),
+            categorical_filters_b,
         )
         if reference_choice == "Dataset A":
             reference, comparison = filtered_a, filtered_b
@@ -788,7 +949,7 @@ def render_app() -> None:
     filter_note = _analysis_filter_note(
         valid_assays_only=valid_assays_only,
         trim_bounds=trim_bounds,
-        categorical_cfg=categorical_cfg,
+        categorical_filters_cfg=categorical_filters_cfg,
         search_axes_label=search_axes_label,
         dismax=float(dismax),
         pairing_mode=mode,
@@ -1275,7 +1436,7 @@ def _analysis_filter_note(
     *,
     valid_assays_only: bool,
     trim_bounds: tuple[float, float] | None,
-    categorical_cfg: dict[str, Any] | None,
+    categorical_filters_cfg: list[dict[str, Any]],
     search_axes_label: str,
     dismax: float,
     pairing_mode: str,
@@ -1290,14 +1451,16 @@ def _analysis_filter_note(
         parts.append(f"Grade range: {trim_bounds[0]:.4g} to {trim_bounds[1]:.4g}")
     else:
         parts.append("Grade range: not applied")
-    if categorical_cfg is not None:
-        parts.append(
-            "Categorical: "
-            f"A[{categorical_cfg['a_col']}] = {_format_filter_values(categorical_cfg['a_values'])}; "
-            f"B[{categorical_cfg['b_col']}] = {_format_filter_values(categorical_cfg['b_values'])}"
-        )
+
+    if categorical_filters_cfg:
+        for cfg in categorical_filters_cfg:
+            parts.append(
+                f"Categorical L{cfg['layer']}: "
+                f"A[{cfg['a_col']}] = {_format_filter_values(cfg['a_values'])}; "
+                f"B[{cfg['b_col']}] = {_format_filter_values(cfg['b_values'])}"
+            )
     else:
-        parts.append("Categorical filter: not applied")
+        parts.append("Categorical filters: not applied")
     return "Filters — " + " · ".join(parts)
 
 
@@ -1379,13 +1542,46 @@ def _available_pair_projections(
     return available
 
 
+def _apply_categorical_filters(
+    frame: pd.DataFrame,
+    categorical_filters: list[tuple[str, list[Any]]],
+) -> pd.DataFrame:
+    """Apply categorical layers sequentially using AND logic between layers."""
+    mask = pd.Series(True, index=frame.index)
+    for column, allowed in categorical_filters:
+        mask &= frame[column].isin(allowed)
+    return frame.loc[mask].copy()
+
+
+def _nested_multiselect(
+    container: Any,
+    label: str,
+    options: list[Any],
+    *,
+    key: str,
+) -> list[Any]:
+    """Render a cascading multiselect and remove stale upstream-dependent values."""
+    if key in st.session_state:
+        current = list(st.session_state[key])
+        cleaned = [value for value in current if value in options]
+        if cleaned != current:
+            st.session_state[key] = cleaned
+    return container.multiselect(
+        label,
+        options,
+        default=options if key not in st.session_state else None,
+        key=key,
+    )
+
+
 def _apply_eligibility_filters(
     frame: pd.DataFrame,
     variable: str,
     valid_only: bool,
     trim_bounds: tuple[float, float] | None,
-    categorical_filter: tuple[str, list[Any]] | None,
+    categorical_filters: list[tuple[str, list[Any]]] | None,
 ) -> pd.DataFrame:
+    """Apply analytical eligibility rules and all active categorical layers."""
     mask = pd.Series(True, index=frame.index)
     numeric_variable = pd.to_numeric(frame[variable], errors="coerce")
     if valid_only:
@@ -1395,8 +1591,7 @@ def _apply_eligibility_filters(
         mask &= np.isfinite(numeric_variable) & numeric_variable.between(
             lower, upper, inclusive="both"
         )
-    if categorical_filter is not None:
-        column, allowed = categorical_filter
+    for column, allowed in categorical_filters or []:
         mask &= frame[column].isin(allowed)
     return frame.loc[mask].copy().reset_index(drop=True)
 
